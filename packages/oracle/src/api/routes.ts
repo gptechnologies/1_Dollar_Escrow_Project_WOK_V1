@@ -1,88 +1,41 @@
 import { Router } from "express";
 import { requireAuth, validateBody } from "./middleware.js";
-import {
-  CreateEscrowSchema,
-  BindAddressSchema,
-  ResolveSchema,
-} from "./types.js";
-import {
-  createEscrow,
-  bindAddress,
-  getEscrowStatus,
-  resolveEscrow,
-} from "../services/escrow.js";
+import { CreateEscrowSchema } from "./types.js";
+import { createEscrow, getEscrowStatus, listEscrows } from "../services/escrow.js";
 
 const router = Router();
 
 /**
  * POST /escrow/create
- * Create a new escrow contract
+ * Create a new escrow contract with immutable payout and funder
+ * Token must be USDC or USDT (allowlisted in factory)
+ * 
+ * Arbitrator count must be 0, 1, or 3 (never 2):
+ * - 0: No arbitration
+ * - 1: Only arbitrator1 (first vote resolves)
+ * - 3: All three arbitrators (arb1+arb2 must agree, or arb3 breaks deadlock)
  */
 router.post("/escrow/create", requireAuth, validateBody(CreateEscrowSchema), async (req, res, next) => {
   try {
     const result = await createEscrow({
+      payout: req.body.payout as `0x${string}`,
+      funder: req.body.funder as `0x${string}`,
+      token: req.body.token as `0x${string}`,
       targetAmount: BigInt(req.body.targetAmount),
-      confirmationAmount: BigInt(req.body.confirmationAmount || "1000000"),
-      deadline: req.body.deadline || 0,
-      tweetId: req.body.tweetId || 0,
-      expectedFunder: req.body.expectedFunderAddress as `0x${string}`,
+      deadline: req.body.deadline,
+      arbitrator1: req.body.arbitrator1 as `0x${string}` | undefined,
+      arbitrator2: req.body.arbitrator2 as `0x${string}` | undefined,
+      arbitrator3: req.body.arbitrator3 as `0x${string}` | undefined,
     });
 
     res.json({
       escrow: result.escrow,
       code: result.code,
       txHash: result.txHash,
+      token: result.token,
       phase: 0,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /escrow/bind-address
- * Bind a wallet address to an escrow role
- */
-router.post("/escrow/bind-address", requireAuth, validateBody(BindAddressSchema), async (req, res, next) => {
-  try {
-    const result = await bindAddress({
-      code: req.body.code,
-      role: req.body.role,
-      address: req.body.address as `0x${string}`,
-      confirmBy: req.body.confirmBy,
-    });
-
-    res.json({
-      escrow: result.escrow,
-      code: req.body.code,
-      txHash: result.txHash,
-      role: req.body.role,
-      address: req.body.address,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /escrow/resolve
- * Resolve an escrow (PAY or REFUND)
- */
-router.post("/escrow/resolve", requireAuth, validateBody(ResolveSchema), async (req, res, next) => {
-  try {
-    const result = await resolveEscrow({
-      code: req.body.code,
-      action: req.body.action,
-      pollId: req.body.pollId,
-      creatorEvidence: req.body.creatorEvidence,
-      confirmerEvidence: req.body.confirmerEvidence,
-    });
-
-    res.json({
-      escrow: result.escrow,
-      code: req.body.code,
-      txHash: result.txHash,
-      action: req.body.action,
+      confirmDeadline: result.confirmDeadline,
+      arbWindowEnd: result.arbWindowEnd,
     });
   } catch (error) {
     next(error);
@@ -103,6 +56,25 @@ router.get("/escrow/status/:code", async (req, res, next) => {
 });
 
 /**
+ * GET /escrow/list
+ * List escrows from Postgres (no chain reads)
+ */
+router.get("/escrow/list", async (req, res, next) => {
+  try {
+    const limit = Number(req.query.limit);
+    const query = typeof req.query.query === "string" ? req.query.query : undefined;
+    const escrows = await listEscrows({
+      limit: Number.isFinite(limit) ? limit : undefined,
+      query,
+    });
+
+    res.json({ escrows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /health
  * Health check endpoint
  */
@@ -114,4 +86,3 @@ router.get("/health", (req, res) => {
 });
 
 export default router;
-

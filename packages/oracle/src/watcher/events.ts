@@ -1,5 +1,10 @@
 /**
- * Event watcher - WSS subscriptions + HTTP backfill
+ * Event watcher - WSS subscriptions + HTTP backfill (Hybrid Confirmation Model)
+ * 
+ * Key changes from V1:
+ * - No longer triggers recordFunding() - funding is derived from balance
+ * - Detects bond transfers and triggers confirmByOracle()
+ * - Watches for new escrow events: ConfirmedBySeller, ConfirmedByOracle, SweptAfterArbWindow
  */
 
 import { parseEventLogs, Log } from "viem";
@@ -13,6 +18,19 @@ import { processEscrowJob } from "./processor.js";
 import { Worker } from "bullmq";
 
 const network = getNetwork(ENV.CHAIN_ID);
+
+// Reorg safety buffer - re-scan this many blocks on backfill to handle reorgs
+// 64 blocks is safe for Arbitrum (~1 minute of blocks)
+const REORG_BUFFER_BLOCKS = 64n;
+
+// Backfill configuration (Alchemy free tier allows max 10 blocks per getLogs)
+const CHUNK_SIZE = 9n;
+const CHUNK_DELAY_MS = 150; // Delay between chunks to avoid rate limits
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 1000;
+
+// Helper for delays
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Active escrow addresses we're watching
 const activeEscrows = new Set<string>();
@@ -54,7 +72,7 @@ export function addActiveEscrow(address: string) {
 }
 
 /**
- * Remove escrow from active set (when resolved)
+ * Remove escrow from active set (when resolved/expired)
  */
 export function removeActiveEscrow(address: string) {
   const addr = address.toLowerCase();
@@ -87,7 +105,7 @@ async function markProcessed(txHash: string, escrow: string, eventType: string) 
   await sql`
     INSERT INTO processed_tx (tx_hash, escrow, event_type)
     VALUES (${txHash}, ${hexToBuffer(escrow)}, ${eventType})
-    ON CONFLICT (tx_hash) DO NOTHING
+    ON CONFLICT (tx_hash, escrow) DO NOTHING
   `;
 }
 
@@ -103,9 +121,10 @@ async function handleEscrowCreated(log: any) {
 }
 
 /**
- * Process USDC Transfer events to active escrows
+ * Process Token Transfer events to active escrows
+ * In hybrid model, this is used for bond detection (confirmation), not funding
  */
-async function handleUSDCTransfer(log: any, escrowAddress: string) {
+async function handleTokenTransfer(log: any, escrowAddress: string) {
   const { from, to, value } = log.args;
   
   if (await isProcessed(log.transactionHash, escrowAddress)) {
@@ -115,7 +134,7 @@ async function handleUSDCTransfer(log: any, escrowAddress: string) {
 
   console.log(`💸 Transfer to ${escrowAddress}: ${value.toString()} from ${from}`);
 
-  // Queue job to check if this needs recording
+  // Queue job to check if this needs processing (bond detection)
   const queue = getEscrowQueue(escrowAddress);
   await queue.add("transfer", {
     escrow: escrowAddress,
@@ -130,7 +149,9 @@ async function handleUSDCTransfer(log: any, escrowAddress: string) {
 }
 
 /**
- * Process Escrow events (ConfirmationRecorded, FundingRecorded, Resolved, etc.)
+ * Process Escrow events (Hybrid Confirmation Model)
+ * Handles: ConfirmedBySeller, ConfirmedByOracle, FinalizedPaid, ResolvedReleased,
+ *          ResolvedRefunded, ExpiredNotConfirmed, ExpiredNotFunded, SweptAfterArbWindow
  */
 async function handleEscrowEvent(log: any, eventName: string) {
   const escrowAddress = (log.address as string).toLowerCase();
@@ -142,16 +163,26 @@ async function handleEscrowEvent(log: any, eventName: string) {
 
   console.log(`📢 ${eventName} on ${escrowAddress}`);
 
-  // Update phase cache if it's a phase-changing event
-  if (["ConfirmationRecorded", "FundingRecorded", "ResolvedPaid", "ResolvedRefunded", "ResolvedPaidByConsent"].includes(eventName)) {
-    const phaseMap: Record<string, number> = {
-      "ConfirmationRecorded": 1,
-      "FundingRecorded": 2,
-      "ResolvedPaid": 3,
-      "ResolvedRefunded": 3,
-      "ResolvedPaidByConsent": 3,
-    };
+  // Phase mapping for DB update (synthetic phase for backward compatibility)
+  // Phase 0: AwaitingConfirmation (not confirmed)
+  // Phase 1: ConfirmedAwaitingFunding (confirmed but not isFunded)
+  // Phase 2: Funded (confirmed and isFunded)
+  // Phase 3: Resolved
+  // Phase 4: Expired
+  const phaseMap: Record<string, number> = {
+    // Confirmation events -> phase 1 (but funding status is derived, so UI should check isFunded)
+    "ConfirmedBySeller": 1,
+    "ConfirmedByOracle": 1,
+    // Terminal events -> phase 3 (resolved) or 4 (expired)
+    "FinalizedPaid": 3,
+    "ResolvedReleased": 3,
+    "ResolvedRefunded": 3,
+    "SweptAfterArbWindow": 3,
+    "ExpiredNotConfirmed": 4,
+    "ExpiredNotFunded": 4,
+  };
 
+  if (eventName in phaseMap) {
     const newPhase = phaseMap[eventName];
     await sql`
       UPDATE escrows
@@ -159,7 +190,8 @@ async function handleEscrowEvent(log: any, eventName: string) {
       WHERE escrow = ${hexToBuffer(escrowAddress)}
     `;
 
-    if (newPhase === 3) {
+    // Remove from active set if terminal
+    if (newPhase >= 3) {
       removeActiveEscrow(escrowAddress);
     }
   }
@@ -204,111 +236,135 @@ export async function startWSS() {
     },
   });
 
-  // Subscribe to USDC transfers to active escrows
-  // Note: We'll poll for these in backfill since topic filter with OR is complex
+  // Note: Token transfers to escrows are detected by the keeper's reconciliation loop
+  // which does targeted per-escrow log queries. This avoids the complexity of
+  // subscribing to all possible escrow addresses.
   
-  console.log("✅ WSS subscriptions active");
+  console.log("✅ WSS subscriptions active (hybrid confirmation model)");
 }
 
 /**
- * HTTP backfill loop
+ * Backfill / Replay from last block
+ * 
+ * This function can replay EscrowCreated events from a given block range
+ * to recover if the oracle goes down. Transfer events are handled by the
+ * keeper's reconciliation loop which does per-escrow queries.
  */
 export async function startBackfill() {
-  const intervalMs = network.backfillIntervalMs;
+  console.log(`🔄 Starting backfill check...`);
   
-  console.log(`🔄 Starting backfill loop (every ${intervalMs}ms)...`);
-
-  async function backfillRound() {
-    try {
-      // Get last processed block
-      const cursorRows = await sql`
-        SELECT last_block FROM cursor WHERE network = ${ENV.CHAIN_ID.toString()}
-      `;
-
-      const fromBlock = cursorRows.length > 0 ? BigInt(cursorRows[0].last_block) + 1n : 0n;
-      const latestBlock = await publicClient.getBlockNumber();
-      const toBlock = latestBlock - BigInt(network.blockConfirmations);
-
-      if (fromBlock > toBlock) {
-        // Nothing to backfill
-        return;
-      }
-
-      console.log(`🔍 Backfilling blocks ${fromBlock} → ${toBlock}`);
-
-      // Fetch EscrowFactory events
-      const factoryLogs = await publicClient.getLogs({
-        address: network.FACTORY as `0x${string}`,
-        event: EscrowFactoryABI[0],
-        fromBlock,
-        toBlock,
-      });
-
-      for (const log of factoryLogs) {
-        await handleEscrowCreated(log);
-      }
-
-      // Fetch USDC Transfer events to active escrows
-      if (activeEscrows.size > 0) {
-        const escrowArray = Array.from(activeEscrows);
+  try {
+    // Get cursor (last processed block)
+    const cursorRows = await sql`
+      SELECT last_block FROM cursor WHERE network = ${ENV.CHAIN_ID.toString()}
+    `;
+    
+    const lastBlock = cursorRows.length > 0 ? BigInt(cursorRows[0].last_block) : 0n;
+    const latestBlock = await publicClient.getBlockNumber();
+    
+    console.log(`📊 Cursor at block ${lastBlock}, latest block ${latestBlock}`);
+    
+    // Calculate safe start block with reorg buffer
+    // This re-scans recent blocks to catch any events that might have been reorged
+    const safeStartBlock = lastBlock > REORG_BUFFER_BLOCKS 
+      ? lastBlock - REORG_BUFFER_BLOCKS 
+      : 0n;
+    
+    // Track the last successfully processed block
+    let lastSuccessfulBlock = safeStartBlock;
+    
+    // If we're behind, backfill EscrowCreated events
+    if (lastBlock > 0 && latestBlock > safeStartBlock) {
+      const gap = latestBlock - safeStartBlock;
+      console.log(`📥 Backfilling ${gap} blocks of EscrowCreated events (with ${REORG_BUFFER_BLOCKS} block reorg buffer)...`);
+      console.log(`   Using chunk size of ${CHUNK_SIZE} blocks (Alchemy free tier limit)`);
+      
+      let fromBlock = safeStartBlock + 1n;
+      
+      while (fromBlock <= latestBlock) {
+        const toBlock = fromBlock + CHUNK_SIZE - 1n > latestBlock ? latestBlock : fromBlock + CHUNK_SIZE - 1n;
         
-        // Chunk if too many (>800 addresses can hit RPC limits)
-        const chunkSize = 500;
-        for (let i = 0; i < escrowArray.length; i += chunkSize) {
-          const chunk = escrowArray.slice(i, i + chunkSize);
-          
-          const transferLogs = await publicClient.getLogs({
-            address: network.USDC as `0x${string}`,
-            event: ERC20ABI[0],
-            args: {
-              to: chunk as `0x${string}`[],
-            },
-            fromBlock,
-            toBlock,
-          });
-
-          for (const log of transferLogs) {
-            const escrowAddr = (log.args.to as string).toLowerCase();
-            await handleUSDCTransfer(log, escrowAddr);
+        let success = false;
+        let retries = 0;
+        
+        while (!success && retries < MAX_RETRIES) {
+          try {
+            const logs = await publicClient.getLogs({
+              address: network.FACTORY as `0x${string}`,
+              event: {
+                type: "event",
+                name: "EscrowCreated",
+                inputs: EscrowFactoryABI[0].inputs,
+              },
+              fromBlock,
+              toBlock,
+            });
+            
+            for (const log of logs) {
+              await handleEscrowCreated(log);
+            }
+            
+            console.log(`   Processed blocks ${fromBlock}-${toBlock}, found ${logs.length} EscrowCreated events`);
+            lastSuccessfulBlock = toBlock;
+            success = true;
+            
+            // Delay between chunks to avoid rate limits
+            await sleep(CHUNK_DELAY_MS);
+            
+          } catch (error: any) {
+            retries++;
+            
+            // Check if it's a rate limit error (429)
+            const isRateLimit = error?.status === 429 || 
+              error?.details?.includes?.('Too Many Requests') ||
+              error?.shortMessage?.includes?.('429');
+            
+            if (isRateLimit && retries < MAX_RETRIES) {
+              const backoffMs = INITIAL_BACKOFF_MS * Math.pow(2, retries - 1);
+              console.warn(`   ⚠️ Rate limited on blocks ${fromBlock}-${toBlock}, backing off ${backoffMs}ms (retry ${retries}/${MAX_RETRIES})`);
+              await sleep(backoffMs);
+            } else if (retries < MAX_RETRIES) {
+              console.warn(`   ⚠️ Error on blocks ${fromBlock}-${toBlock}, retrying (${retries}/${MAX_RETRIES}):`, error?.shortMessage || error);
+              await sleep(INITIAL_BACKOFF_MS);
+            } else {
+              console.error(`   ❌ Failed to process blocks ${fromBlock}-${toBlock} after ${MAX_RETRIES} retries:`, error?.shortMessage || error);
+              // Don't advance past this failed block - stop backfill here
+              // This prevents skipping events
+            }
           }
         }
-      }
-
-      // Fetch Escrow events from active escrows
-      for (const escrowAddr of activeEscrows) {
-        const escrowLogs = await publicClient.getLogs({
-          address: escrowAddr as `0x${string}`,
-          fromBlock,
-          toBlock,
-        });
-
-        for (const log of escrowLogs) {
-          // Parse event name from topics
-          const parsed = parseEventLogs({
-            abi: EscrowABI,
-            logs: [log],
-          });
-
-          if (parsed.length > 0) {
-            await handleEscrowEvent(parsed[0], parsed[0].eventName as string);
-          }
+        
+        // If we failed after all retries, stop backfill to avoid skipping blocks
+        if (!success) {
+          console.error(`   ❌ Stopping backfill at block ${fromBlock} due to persistent errors`);
+          break;
         }
+        
+        fromBlock = toBlock + 1n;
       }
-
-      // Update cursor
+    }
+    
+    // Only update cursor to last successfully processed block
+    if (lastSuccessfulBlock > safeStartBlock) {
       await sql`
         INSERT INTO cursor (network, last_block, updated_at)
-        VALUES (${ENV.CHAIN_ID.toString()}, ${toBlock.toString()}, NOW())
-        ON CONFLICT (network) DO UPDATE SET last_block = ${toBlock.toString()}, updated_at = NOW()
+        VALUES (${ENV.CHAIN_ID.toString()}, ${lastSuccessfulBlock.toString()}, NOW())
+        ON CONFLICT (network) DO UPDATE SET last_block = ${lastSuccessfulBlock.toString()}, updated_at = NOW()
       `;
-
-      console.log(`✅ Backfill complete: cursor at block ${toBlock}`);
-    } catch (error) {
-      console.error("❌ Backfill error:", error);
+      console.log(`✅ Backfill complete, cursor updated to block ${lastSuccessfulBlock}`);
+    } else {
+      console.log(`✅ Backfill complete, cursor unchanged at block ${lastBlock}`);
     }
+    
+    console.log(`   Note: Transfer reconciliation is handled by keeper loop`);
+  } catch (error) {
+    console.error("❌ Backfill error:", error);
   }
+}
 
-  // Run immediately, then on interval
-  await backfillRound();
-  setInterval(backfillRound, intervalMs);
+/**
+ * Get all active escrow addresses
+ */
+export function getActiveEscrowAddresses(): string[] {
+  return Array.from(activeEscrows);
 }

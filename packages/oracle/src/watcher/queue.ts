@@ -35,7 +35,7 @@ export interface EscrowJobData {
  * Get or create a queue for an escrow address
  */
 export function getEscrowQueue(escrowAddress: string): Queue<EscrowJobData> {
-  return new Queue<EscrowJobData>(`escrow:${escrowAddress}`, {
+  return new Queue<EscrowJobData>(`escrow-${escrowAddress}`, {
     connection,
     defaultJobOptions: {
       attempts: 3,
@@ -62,7 +62,7 @@ export function createEscrowWorker(
   processor: (job: EscrowJobData) => Promise<void>
 ): Worker<EscrowJobData> {
   return new Worker<EscrowJobData>(
-    `escrow:${escrowAddress}`,
+    `escrow-${escrowAddress}`,
     async (job) => {
       console.log(`[Worker ${escrowAddress}] Processing ${job.data.eventType} from tx ${job.data.txHash}`);
       await processor(job.data);

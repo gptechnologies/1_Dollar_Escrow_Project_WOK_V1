@@ -6,6 +6,8 @@
     "compile": "hardhat compile",
     "deploy:sepolia": "hardhat run scripts/deploy-sepolia.ts --network arbitrumSepolia",
     "deploy:prod": "hardhat run scripts/deploy-prod.ts --network arbitrumOne",
+    "deploy:sepolia-v2": "hardhat run scripts/deploy-sepolia-v2.ts --network arbitrumSepolia",
+    "deploy:prod-v2": "hardhat run scripts/deploy-prod-v2.ts --network arbitrumOne",
     "verify": "hardhat verify --network arbitrumSepolia",
     "test": "hardhat test"
   },
@@ -14,6 +16,8 @@
     "@nomicfoundation/hardhat-verify": "^2.0.0",
     "hardhat": "^2.19.4",
     "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1"
   }
 }
-

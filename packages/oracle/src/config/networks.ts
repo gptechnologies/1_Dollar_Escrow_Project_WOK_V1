@@ -9,7 +9,8 @@ export interface NetworkConfig {
   RPC_WSS: string;
   FACTORY: string;
   USDC: string;
-  confirmationAmount: bigint; // 1 USDC = 1e6 (6 decimals)
+  USDT: string;
+  confirmationAmount: bigint; // $1 = 1e6 (6 decimals for both USDC/USDT)
   blockConfirmations: number; // reorg safety lag
   backfillIntervalMs: number;
 }
@@ -23,7 +24,8 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     RPC_WSS: process.env.RPC_WSS || "wss://sepolia-rollup.arbitrum.io/rpc",
     FACTORY: process.env.FACTORY_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_FACTORY",
     USDC: process.env.USDC_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_MOCK_USDC",
-    confirmationAmount: 1_000_000n, // 1 USDC (6 decimals)
+    USDT: process.env.USDT_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_MOCK_USDT",
+    confirmationAmount: 1_000_000n, // $1 (6 decimals)
     blockConfirmations: 2, // wait 2 blocks for reorg safety
     backfillIntervalMs: 10_000, // backfill every 10s
   },
@@ -35,7 +37,8 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     RPC_WSS: process.env.RPC_WSS || "wss://arb1.arbitrum.io/rpc",
     FACTORY: process.env.FACTORY_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_FACTORY",
     USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", // Real USDC on Arbitrum One
-    confirmationAmount: 1_000_000n, // 1 USDC (6 decimals)
+    USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", // Real USDT on Arbitrum One
+    confirmationAmount: 1_000_000n, // $1 (6 decimals)
     blockConfirmations: 3, // more conservative on mainnet
     backfillIntervalMs: 15_000, // backfill every 15s
   },

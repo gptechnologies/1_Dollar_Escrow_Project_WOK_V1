@@ -24,6 +24,7 @@ export const ENV = {
   // Contracts
   FACTORY_ADDRESS: process.env.FACTORY_ADDRESS || "",
   USDC_ADDRESS: process.env.USDC_ADDRESS || "",
+  USDT_ADDRESS: process.env.USDT_ADDRESS || "",
   
   // Database
   POSTGRES_URL: process.env.POSTGRES_URL || "",

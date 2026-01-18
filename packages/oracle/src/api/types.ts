@@ -1,32 +1,33 @@
 import { z } from "zod";
 
 // Request schemas
+// Note: Arbitrator count must be 0, 1, or 3 (never 2)
+// - 0: No arbitration
+// - 1: Only arbitrator1 (first vote resolves)
+// - 3: All three arbitrators (arb1+arb2 must agree, or arb3 breaks deadlock)
 export const CreateEscrowSchema = z.object({
+  payout: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid payout address"),
+  funder: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid funder address"),
+  token: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address (must be USDC or USDT)"),
   targetAmount: z.string().regex(/^\d+$/, "Must be a valid integer string"),
-  confirmationAmount: z.string().regex(/^\d+$/, "Must be a valid integer string").optional(),
-  deadline: z.number().int().nonnegative().optional(),
-  tweetId: z.number().int().nonnegative().optional(),
-  expectedFunderAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address"),
+  deadline: z.number().int().positive("Deadline must be a future timestamp"),
+  arbitrator1: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid arbitrator1 address").optional(),
+  arbitrator2: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid arbitrator2 address").optional(),
+  arbitrator3: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid arbitrator3 address (deadlock arbitrator)").optional(),
+}).refine((data) => {
+  // Enforce 0/1/3 rule
+  const hasArb1 = !!data.arbitrator1;
+  const hasArb2 = !!data.arbitrator2;
+  const hasArb3 = !!data.arbitrator3;
+  
+  // If arb2 or arb3 is set, all three must be set
+  if (hasArb2 || hasArb3) {
+    return hasArb1 && hasArb2 && hasArb3;
+  }
+  return true;
+}, {
+  message: "Must have 0, 1, or 3 arbitrators (2 not allowed). If setting arb2 or arb3, all three must be provided."
 });
-
-export const BindAddressSchema = z.object({
-  code: z.string().min(1),
-  role: z.enum(["FUNDER", "CONFIRMER"]),
-  address: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address"),
-  confirmBy: z.number().int().nonnegative().optional(), // Unix timestamp for confirmer TTL
-});
-
-export const ResolveSchema = z.object({
-  code: z.string().min(1),
-  action: z.enum(["PAY", "REFUND"]),
-  pollId: z.number().int().nonnegative().optional(),
-  creatorEvidence: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
-  confirmerEvidence: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
-});
-
-export type CreateEscrowRequest = z.infer<typeof CreateEscrowSchema>;
-export type BindAddressRequest = z.infer<typeof BindAddressSchema>;
-export type ResolveRequest = z.infer<typeof ResolveSchema>;
 
 // Response types
 export interface EscrowStatusResponse {
@@ -34,32 +35,54 @@ export interface EscrowStatusResponse {
   code: string;
   phase: number;
   phaseName: string;
-  expectedFunder: string | null;
-  expectedConfirmer: string | null;
-  funder: string | null;
-  confirmer: string | null;
-  network: string;
+  payout: string;
+  funder: string;
+  token: string;
+  targetAmount: string;
+  fundedRecorded: string;
+  confirmationAmount: string;
+  deadline: number;
+  confirmDeadline: number;
+  arbWindowEnd: number;
+  createdAt: number;
+  confirmationRecorded: boolean;
+  fundingRecorded: boolean;
+  // Arbitration (0, 1, or 3 arbitrators)
+  arbitrator1: string;
+  arbitrator2: string;
+  arbitrator3: string;  // Deadlock arbitrator (3-arb setup only)
+  arbitratorCount: number;  // 0, 1, or 3 (never 2)
+  deadlocked: boolean;  // True if arb1 and arb2 voted differently
+  isPayable: boolean;
+  isExpirableNoConfirm: boolean;
+  isExpirableNoFund: boolean;
+  isTerminal: boolean;
+  isInArbWindow: boolean;
+  isSweepableAfterArbWindow: boolean;
 }
 
 export interface CreateEscrowResponse {
   escrow: string;
   code: string;
   txHash: string;
+  token: string;
   phase: number;
+  confirmDeadline: number;
 }
 
-export interface BindAddressResponse {
+export interface EscrowListItem {
   escrow: string;
   code: string;
-  txHash: string;
-  role: string;
-  address: string;
+  phase: number;
+  phaseName: string;
+  deadline: number | null;
+  targetAmount: string | null;
+  payout: string;
+  funder: string;
 }
 
-export interface ResolveResponse {
-  escrow: string;
-  code: string;
-  txHash: string;
-  action: string;
+export interface EscrowListResponse {
+  escrows: EscrowListItem[];
 }
 
+export type CreateEscrowRequest = z.infer<typeof CreateEscrowSchema>;

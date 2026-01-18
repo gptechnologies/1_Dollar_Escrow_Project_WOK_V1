@@ -6,6 +6,9 @@
     "packages/*"
   ],
   "scripts": {
+    "ui:dev": "npm --prefix packages/ui run dev",
+    "ui:build": "npm --prefix packages/ui run build",
+    "ui:start": "npm --prefix packages/ui run start",
     "oracle:dev": "pnpm --filter oracle dev",
     "oracle:build": "pnpm --filter oracle build",
     "oracle:start": "pnpm --filter oracle start",
@@ -19,6 +22,9 @@
   "engines": {
     "node": ">=18.0.0",
     "pnpm": ">=8.0.0"
+  },
+  "dependencies": {
+    "@scure/bip39": "^2.0.1",
+    "next": "^16.1.1"
   }
 }
-
