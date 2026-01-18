@@ -3,7 +3,7 @@
  */
 
 import { Queue, Worker, QueueEvents } from "bullmq";
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import { ENV } from "../config/env.js";
 
 if (!ENV.REDIS_URL) {
