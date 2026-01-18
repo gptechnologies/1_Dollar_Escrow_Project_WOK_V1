@@ -76,7 +76,7 @@ export async function getAllPending(): Promise<PendingTx[]> {
   const data = await redisConnection.hgetall(PENDING_KEY);
   if (!data) return [];
 
-  return Object.values(data).map((v) => JSON.parse(v) as PendingTx);
+  return Object.values(data).map((v) => JSON.parse(v as string) as PendingTx);
 }
 
 /**

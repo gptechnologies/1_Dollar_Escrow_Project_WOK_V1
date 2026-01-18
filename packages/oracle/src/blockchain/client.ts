@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, webSocket } from "viem";
+import { createPublicClient, createWalletClient, http, webSocket, type PublicClient } from "viem";
 import { arbitrumSepolia, arbitrum } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { ENV } from "../config/env.js";
@@ -27,7 +27,7 @@ export const walletClient = createWalletClient({
 });
 
 // WebSocket client for event subscriptions (Phase 5)
-export const wsClient = createPublicClient({
+export const wsClient: PublicClient = createPublicClient({
   chain,
   transport: webSocket(ENV.RPC_WSS, {
     reconnect: {

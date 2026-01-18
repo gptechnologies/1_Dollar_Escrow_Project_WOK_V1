@@ -3,21 +3,21 @@
  */
 
 import { Queue, Worker, QueueEvents } from "bullmq";
-import IORedis from "ioredis";
+import Redis from "ioredis";
 import { ENV } from "../config/env.js";
 
 if (!ENV.REDIS_URL) {
   throw new Error("REDIS_URL is required");
 }
 
-const connection = new IORedis(ENV.REDIS_URL, {
+const connection = new Redis(ENV.REDIS_URL, {
   maxRetriesPerRequest: null,
 });
 
 // Test connection
 connection.ping().then(() => {
   console.log("✅ Redis connected");
-}).catch((err) => {
+}).catch((err: Error) => {
   console.error("❌ Redis connection failed:", err.message);
   process.exit(1);
 });
