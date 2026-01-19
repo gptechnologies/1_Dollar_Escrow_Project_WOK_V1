@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react';
 import { Search, Loader2 } from 'lucide-react';
 import EscrowCard from './EscrowCard';
+import { FACTORY_ADDRESS } from '@/lib/chain';
 
 // Full escrow data from status endpoint (or partial from list)
 type EscrowData = {
@@ -117,7 +118,8 @@ export default function EscrowDashboard() {
       <div className="mb-4">
         <h3 className="text-lg font-semibold text-white">Escrow Lookup</h3>
         <p className="text-xs text-white/60">
-          Search by escrow address or lookup code
+          Current Factory Address:{' '}
+          <span className="font-mono text-[#0BB89A] break-all">{FACTORY_ADDRESS}</span>
         </p>
       </div>
 

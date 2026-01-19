@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Temp-Escrow | Session-Based Crypto Escrow",
-  description: "Create instant, session-based cryptocurrency escrows with zero friction. Powered by Arbitrum and USDC.",
+  title: "Crow | Peer-to-Peer Escrow",
+  description: "Create escrows instantly with no sign up. Powered by Arbitrum, fees capped at $1.",
 };
 
 export default function RootLayout({

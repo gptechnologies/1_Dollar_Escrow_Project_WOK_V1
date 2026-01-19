@@ -18,7 +18,7 @@ export const USDC_ADDRESS = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831' as cons
 export const USDT_ADDRESS = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9' as const;
 
 // Factory contract address
-export const FACTORY_ADDRESS = '0x...' as const; // TODO: Replace with actual factory address
+export const FACTORY_ADDRESS = '0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9' as const;
 
 // Token metadata
 export const TOKEN_INFO: Record<string, { symbol: string; decimals: number }> = {

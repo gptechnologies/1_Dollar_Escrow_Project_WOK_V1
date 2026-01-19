@@ -9,7 +9,6 @@ import EscrowDashboard from '@/components/EscrowDashboard';
 import InfoAccordion from '@/components/InfoAccordion';
 import Image from 'next/image';
 import { useSessionStore } from '@/store/useSessionStore';
-import { FACTORY_ADDRESS } from '@/lib/chain';
 
 export default function Home() {
   const { touchSession, sessionId } = useSessionStore();
@@ -116,13 +115,6 @@ export default function Home() {
                     </ul>
                   </div>
 
-                  {/* Factory Address Card */}
-                  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl px-5 py-3 w-full lg:w-[320px] lg:ml-auto mt-3">
-                    <p className="text-sm text-white/70">
-                      <span className="text-white font-medium">Current Factory Address:</span>{' '}
-                      <span className="font-mono text-[#0BB89A]">{FACTORY_ADDRESS}</span>
-                    </p>
-                  </div>
                 </div>
               </div>
             </div>
