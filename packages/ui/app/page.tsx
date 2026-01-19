@@ -98,7 +98,7 @@ export default function Home() {
                     <ul className="space-y-2 text-sm text-white/70">
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">1.</span>
-                        <span>FIRST, create an escrow with the instant escrow form. The buyer address is the wallet that will be funding the escrow. The seller address is the wallet that will be paid if successful. This will be given an escrow address and lookup code.</span>
+                        <span>FIRST, create an escrow. The buyer address is the wallet that will be funding the escrow. The seller address is the wallet that will be paid if successful. This will be given an escrow address and lookup code.</span>
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">2.</span>
@@ -106,7 +106,7 @@ export default function Home() {
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">3.</span>
-                        <span>AFTER, the escrow is confirmed, fund the escrow before the deadline. Funds are released automatically released to the seller on the deadline.</span>
+                        <span>AFTER, the escrow is confirmed, fund the escrow before the deadline. Funds are released automatically to the seller on the deadline.</span>
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">4.</span>
