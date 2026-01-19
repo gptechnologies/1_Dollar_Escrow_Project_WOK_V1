@@ -98,19 +98,19 @@ export default function Home() {
                     <ul className="space-y-2 text-sm text-white/70">
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">1.</span>
-                        <span>FIRST, fill out the details of your escrow and press Create Escrow. You will be given an escrow address and lookup code. Your escrow will appear in the live dashboard below.</span>
+                        <span>FIRST, create an escrow with the instant escrow form. The buyer address is the wallet that will be funding the escrow. The seller address is the wallet that will be paid if successful. This will be given an escrow address and lookup code.</span>
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">2.</span>
-                        <span>NEXT, the seller confirms the escrow by sending $1 of USDC/USDT to the escrow address or with the Confirm button in the escrow dashboard below.</span>
+                        <span>NEXT, the seller confirms the escrow by sending $1 to the escrow address or with the Confirm button in the escrow dashboard.</span>
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">3.</span>
-                        <span>AFTER, the seller has confirmed the escrow, the buyer funds the escrow before the deadline. Funds are released to the seller after the deadline, automatically.</span>
+                        <span>AFTER, the escrow is confirmed, fund the escrow before the deadline. Funds are released automatically released to the seller on the deadline.</span>
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">4.</span>
-                        <span>If arbitration is chosen, all arbitrators must call the same action within 7 days after the deadline, either settle or refund, or funds will need to be requested from the treasury.</span>
+                        <span>If arbitrators are filled out, they are the only option for resolution or funds will need to be requested from the treasury.</span>
                       </li>
                     </ul>
                   </div>
