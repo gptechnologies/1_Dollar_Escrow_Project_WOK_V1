@@ -1,46 +1,12 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
 import CreateEscrowCard from '@/components/CreateEscrowCard';
 import SplineHero from '@/components/SplineHero';
-import SessionTimer from '@/components/SessionTimer';
-import SessionExpiredToast from '@/components/SessionExpiredToast';
 import EscrowDashboard from '@/components/EscrowDashboard';
 import InfoAccordion from '@/components/InfoAccordion';
 import Image from 'next/image';
-import { useSessionStore } from '@/store/useSessionStore';
 
 export default function Home() {
-  const { touchSession, sessionId } = useSessionStore();
-  const [showExpiredToast, setShowExpiredToast] = useState(false);
-  const previousSessionId = useRef(sessionId);
-
-  useEffect(() => {
-    // Detect when session ID changes (session reset)
-    if (previousSessionId.current !== sessionId) {
-      setShowExpiredToast(true);
-      previousSessionId.current = sessionId;
-    }
-  }, [sessionId]);
-
-  useEffect(() => {
-    // Reset timer on user interaction
-    const handleActivity = () => {
-      touchSession();
-    };
-
-    // Listen for user activity
-    window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('keypress', handleActivity);
-    window.addEventListener('click', handleActivity);
-
-    return () => {
-      window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('keypress', handleActivity);
-      window.removeEventListener('click', handleActivity);
-    };
-  }, [touchSession]);
-
   return (
     <main className="min-h-screen relative">
       {/* Global Spline Background (fixed, covers entire page) */}
@@ -48,12 +14,6 @@ export default function Home() {
 
       {/* All foreground content */}
       <div className="relative z-10">
-        {/* Session Expired Toast */}
-        <SessionExpiredToast 
-          show={showExpiredToast} 
-          onClose={() => setShowExpiredToast(false)} 
-        />
-        
         {/* ==================== SECTION 1: Hero ==================== */}
         <section className="relative">
           <div className="relative z-30">
@@ -73,10 +33,9 @@ export default function Home() {
                     <span className="absolute left-0 top-full text-xs text-white/60 whitespace-nowrap">The simplest P2P escrow service</span>
                   </div>
                 </div>
-                <p className="text-sm md:text-base font-medium text-white/80">
+                <p className="text-sm md:text-base font-medium text-white/80 text-center flex-1">
                   No sign up required. <span className="text-[#0BB89A]">*Supports USDC or USDT on the ARBITRUM network*</span>
                 </p>
-                <SessionTimer />
               </div>
             </div>
 
@@ -106,7 +65,7 @@ export default function Home() {
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">3.</span>
-                        <span>AFTER, the escrow is confirmed, fund the escrow before the deadline. Funds are released automatically to the seller on the deadline.</span>
+                        <span>LAST, after the escrow is confirmed, fund the escrow before the deadline. Funds are released automatically to the seller on the deadline.</span>
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">4.</span>
