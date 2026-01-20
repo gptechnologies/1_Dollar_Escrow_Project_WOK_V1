@@ -19,7 +19,7 @@ export default function SplineHero() {
     <div className="fixed inset-0 overflow-hidden z-0 pointer-events-none">
       {/* Fallback (loading / mobile / error) */}
       {(isLoading || isMobile || loadError) && (
-        <div className="absolute inset-0 bg-black z-10 transition-opacity duration-700" />
+        <div className="absolute inset-0 bg-[#463770] z-10 transition-opacity duration-700" />
       )}
 
       {/* Spline Scene (Desktop only) */}

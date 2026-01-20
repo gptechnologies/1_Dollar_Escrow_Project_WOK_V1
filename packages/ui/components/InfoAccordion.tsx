@@ -8,6 +8,7 @@ interface AccordionItem {
   id: string;
   title: string;
   content: React.ReactNode;
+  mobileOnly?: boolean;
 }
 
 interface InfoAccordionProps {
@@ -32,10 +33,12 @@ export default function InfoAccordion({ items }: InfoAccordionProps) {
     <div className="space-y-4 max-w-2xl mx-auto">
       {items.map((item) => {
         const isOpen = openId === item.id;
+        // Apply responsive visibility class based on mobileOnly flag
+        const visibilityClass = item.mobileOnly ? 'md:hidden' : '';
         return (
           <div
             key={item.id}
-            className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden"
+            className={`bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden ${visibilityClass}`}
           >
             {/* Header */}
             <button

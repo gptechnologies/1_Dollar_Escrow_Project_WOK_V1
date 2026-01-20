@@ -18,9 +18,27 @@ export default function Home() {
         <section className="relative">
           <div className="relative z-30">
             
-            {/* Header */}
-            <div className="max-w-7xl mx-auto px-4 pt-6">
-              <div className="flex justify-between items-center">
+            {/* Header - Mobile: simplified 3-line hero, Desktop: original layout */}
+            <div className="max-w-7xl mx-auto px-4 pt-[calc(env(safe-area-inset-top)+1.5rem)] md:pt-6">
+              {/* Mobile Hero (< md) */}
+              <div className="md:hidden flex flex-col items-center text-center gap-2 pb-4">
+                <p className="text-xs text-white/60">No sign up required</p>
+                <div className="flex items-center gap-2">
+                  <Image 
+                    src="/Crow Logo Isolated Black.png" 
+                    alt="Crow Logo" 
+                    width={40} 
+                    height={40} 
+                  />
+                  <h1 className="text-3xl font-bold text-white">Crow</h1>
+                </div>
+                <p className="text-sm text-white/70">
+                  Instant escrow for <span className="text-[#0BB89A]">USDC/USDT</span> on Arbitrum
+                </p>
+              </div>
+
+              {/* Desktop Hero (>= md) */}
+              <div className="hidden md:flex justify-between items-center">
                 <div className="flex items-center gap-2">
                   <Image 
                     src="/Crow Logo Isolated Black.png" 
@@ -44,15 +62,15 @@ export default function Home() {
               <div className="flex flex-col lg:flex-row lg:justify-between lg:items-stretch gap-8">
                 
                 {/* LEFT: Existing Card (Margins preserved) */}
-                <div className="flex-shrink-0">
+                <div className="flex-shrink-0 mx-auto md:mx-0">
                   <CreateEscrowCard />
                 </div>
 
-                {/* RIGHT: New Side Panel - top info box */}
-                <div className="flex-1 max-w-2xl flex flex-col justify-between">
+                {/* RIGHT: How It Works panel - hidden on mobile, shown on desktop */}
+                <div className="hidden lg:flex flex-1 max-w-2xl flex-col justify-between">
                   
-                  {/* 1. Top Info Box - full width on mobile, right-aligned on desktop */}
-                  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5 w-full lg:w-[320px] lg:ml-auto">
+                  {/* Top Info Box - right-aligned on desktop */}
+                  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5 w-[320px] ml-auto">
                     <h3 className="text-lg font-semibold text-white mb-2">How It Works</h3>
                     <ul className="space-y-2 text-sm text-white/70">
                       <li className="flex items-start gap-2">
@@ -80,18 +98,45 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ==================== SECTION 1.5: Live Escrows ==================== */}
-        <section className="px-4 pt-16 pb-12">
+        {/* ==================== SECTION 2: Escrow Lookup ==================== */}
+        <section className="px-4 pt-8 md:pt-16 pb-8 md:pb-12">
           <div className="max-w-6xl mx-auto">
             <EscrowDashboard />
           </div>
         </section>
 
-        {/* ==================== SECTION 2: Information Accordion ==================== */}
-        <section className="py-16 px-4">
+        {/* ==================== SECTION 3: Information Accordion ==================== */}
+        <section className="py-8 md:py-16 px-4">
           <div className="max-w-7xl mx-auto">
             <InfoAccordion
               items={[
+                {
+                  id: 'how-it-works',
+                  title: 'How It Works',
+                  mobileOnly: true,
+                  content: (
+                    <>
+                      <ul className="space-y-3 text-sm text-white/70">
+                        <li className="flex items-start gap-2">
+                          <span className="text-[#0BB89A] font-bold">1.</span>
+                          <span>Create an escrow with buyer &amp; seller addresses, amount, and deadline. You&apos;ll get a unique escrow address and lookup code.</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <span className="text-[#0BB89A] font-bold">2.</span>
+                          <span>Seller confirms by sending $1 to the escrow address or using the Confirm button.</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <span className="text-[#0BB89A] font-bold">3.</span>
+                          <span>Buyer funds the escrow. Funds release automatically to seller at deadline.</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <span className="text-[#0BB89A] font-bold">4.</span>
+                          <span>Optional arbitrators can resolve disputes if assigned.</span>
+                        </li>
+                      </ul>
+                    </>
+                  ),
+                },
                 {
                   id: 'who-would-use',
                   title: 'Who Would Use This',
@@ -106,32 +151,6 @@ export default function Home() {
                         <li>Direct Person to Person purchasing: No more arguing over whether to pay before the seller ships or vice-versa. This service allows you to prove intent to pay, without sending the money upfront.</li>
                         <li>Put your money on the table: A friendly $10 bet, becomes a $20 escrow where both parties fund half, and an arbitrator (or two) decides the winner.</li>
                       </ul>
-                    </>
-                  ),
-                },
-                {
-                  id: 'how-it-works-detailed',
-                  title: 'How It Works (Detailed)',
-                  content: (
-                    <>
-                      <p className="mb-4">Expanding on the quick guide:</p>
-                      <ol className="space-y-3 list-decimal list-inside">
-                        <li>
-                          <strong className="text-white">Create Escrow:</strong> The buyer or seller initiates by filling out the form with the amount, token, buyer address, seller address, and payout deadline.
-                        </li>
-                        <li>
-                          <strong className="text-white">Seller Confirmation:</strong> The <em>seller</em> sends exactly $1 USDC to the generated escrow address. This confirms their participation and readiness.
-                        </li>
-                        <li>
-                          <strong className="text-white">Buyer Funding:</strong> The <em>buyer</em> then sends the full escrow amount (e.g., $100 USDC) to the same escrow address.
-                        </li>
-                        <li>
-                          <strong className="text-white">Automatic Release:</strong> Once the payout deadline is reached and both parties have funded (seller $1, buyer full amount), the full escrow amount is automatically sent to the seller's payout address.
-                        </li>
-                        <li>
-                          <strong className="text-white">Dispute Resolution:</strong> <em>Important:</em> Our service does not arbitrate disputes. Users must rely on their own contracts, legal agreements, or law enforcement in case of issues.
-                        </li>
-                      </ol>
                     </>
                   ),
                 },

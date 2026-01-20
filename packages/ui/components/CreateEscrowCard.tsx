@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Loader2, Copy, ExternalLink, Check, ChevronDown } from 'lucide-react';
+import { Loader2, Copy, ExternalLink, Check, ChevronDown, ClipboardPaste } from 'lucide-react';
 import DeadlineDateTimePicker from './DeadlineDateTimePicker';
 
 interface CreatedEscrow {
@@ -11,6 +11,12 @@ interface CreatedEscrow {
   token: string;
   confirmDeadline: number;
 }
+
+// Utility to shorten Ethereum addresses for preview
+const shortenAddress = (address: string): string => {
+  if (!address || address.length < 10) return address;
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+};
 
 // Token options - addresses will be provided by env or hardcoded for now
 const TOKEN_OPTIONS = [
@@ -43,6 +49,23 @@ export default function CreateEscrowCard() {
     arbitrator2: '',
     arbitrator3: '',
   });
+  // Track whether address fields have been blurred (for showing preview)
+  const [fundingAddressBlurred, setFundingAddressBlurred] = useState(false);
+  const [counterpartyBlurred, setCounterpartyBlurred] = useState(false);
+
+  // Paste from clipboard helper
+  const pasteFromClipboard = async (
+    setter: (value: string) => void,
+    errorKey: keyof typeof errors
+  ) => {
+    try {
+      const text = await navigator.clipboard.readText();
+      setter(text.trim());
+      if (errors[errorKey]) setErrors({ ...errors, [errorKey]: '' });
+    } catch {
+      // Clipboard access denied or unavailable
+    }
+  };
 
   // Validate Ethereum address format
   const isValidEthAddress = (address: string) => {
@@ -311,6 +334,8 @@ export default function CreateEscrowCard() {
     setShowAdvanced(false);
     setDeadlineDate('');
     setDeadlineTime('23:59');
+    setFundingAddressBlurred(false);
+    setCounterpartyBlurred(false);
     setErrors({
       amount: '',
       token: '',
@@ -441,7 +466,7 @@ export default function CreateEscrowCard() {
                 placeholder="100.00"
                 step="0.01"
                 min="0"
-                className={`w-full px-2.5 py-2 border rounded-lg focus:outline-none transition-colors bg-white/20 backdrop-blur-sm text-white text-sm placeholder:text-white/50 ${
+                className={`w-full px-2.5 py-2.5 md:py-2 border rounded-lg focus:outline-none transition-colors bg-white/20 backdrop-blur-sm text-white text-sm placeholder:text-white/50 ${
                   errors.amount ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                 }`}
                 required
@@ -450,10 +475,33 @@ export default function CreateEscrowCard() {
                 <p className="mt-0.5 text-xs text-red-400">{errors.amount}</p>
               )}
             </div>
-            <div className="w-24">
+            
+            {/* Token - Segmented control on mobile, select on desktop */}
+            <div className="w-28 md:w-24">
               <label htmlFor="token" className="block text-xs font-semibold text-white/90 mb-1">
                 Token
               </label>
+              {/* Mobile: Segmented control */}
+              <div className="md:hidden flex rounded-lg border border-white/40 overflow-hidden h-[42px]">
+                {TOKEN_OPTIONS.map((token) => (
+                  <button
+                    key={token.value}
+                    type="button"
+                    onClick={() => {
+                      setSelectedToken(token.value);
+                      if (errors.token) setErrors({ ...errors, token: '' });
+                    }}
+                    className={`flex-1 text-sm font-medium transition-colors ${
+                      selectedToken === token.value
+                        ? 'bg-[#0BB89A] text-white'
+                        : 'bg-white/10 text-white/70 hover:bg-white/20'
+                    }`}
+                  >
+                    {token.label}
+                  </button>
+                ))}
+              </div>
+              {/* Desktop: Select dropdown */}
               <select
                 id="token"
                 value={selectedToken}
@@ -461,7 +509,7 @@ export default function CreateEscrowCard() {
                   setSelectedToken(e.target.value);
                   if (errors.token) setErrors({ ...errors, token: '' });
                 }}
-                className={`w-full px-2 py-2 border rounded-lg focus:outline-none transition-colors bg-white/20 backdrop-blur-sm text-white text-sm cursor-pointer ${
+                className={`hidden md:block w-full px-2 py-2 border rounded-lg focus:outline-none transition-colors bg-white/20 backdrop-blur-sm text-white text-sm cursor-pointer ${
                   errors.token ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                 }`}
               >
@@ -482,20 +530,38 @@ export default function CreateEscrowCard() {
             <label htmlFor="fundingAddress" className="block text-xs font-semibold text-white/90 mb-1">
               Buyer Wallet Address (Funder)
             </label>
-            <input
-              type="text"
-              id="fundingAddress"
-              value={fundingAddress}
-              onChange={(e) => {
-                setFundingAddress(e.target.value);
-                if (errors.fundingAddress) setErrors({ ...errors, fundingAddress: '' });
-              }}
-              placeholder="0x..."
-              className={`w-full px-2.5 py-2 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
-                errors.fundingAddress ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-              }`}
-              required
-            />
+            <div className="relative">
+              <input
+                type="text"
+                id="fundingAddress"
+                value={fundingAddress}
+                onChange={(e) => {
+                  setFundingAddress(e.target.value);
+                  setFundingAddressBlurred(false);
+                  if (errors.fundingAddress) setErrors({ ...errors, fundingAddress: '' });
+                }}
+                onBlur={() => setFundingAddressBlurred(true)}
+                onFocus={() => setFundingAddressBlurred(false)}
+                placeholder="0x..."
+                className={`w-full px-2.5 py-2.5 md:py-2 pr-10 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
+                  errors.fundingAddress ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
+                }`}
+                required
+              />
+              {/* Paste button (mobile-first, visible on all) */}
+              <button
+                type="button"
+                onClick={() => pasteFromClipboard(setFundingAddress, 'fundingAddress')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-white/50 hover:text-white/80 transition-colors"
+                title="Paste from clipboard"
+              >
+                <ClipboardPaste className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Address preview on blur */}
+            {fundingAddressBlurred && fundingAddress && isValidEthAddress(fundingAddress) && (
+              <p className="mt-0.5 text-[10px] text-white/50 font-mono">{shortenAddress(fundingAddress)}</p>
+            )}
             {errors.fundingAddress && (
               <p className="mt-0.5 text-xs text-red-400">{errors.fundingAddress}</p>
             )}
@@ -504,22 +570,40 @@ export default function CreateEscrowCard() {
           {/* Seller Address (Counterparty/Payout) */}
           <div>
             <label htmlFor="counterparty" className="block text-xs font-semibold text-white/90 mb-1">
-              Seller Wallet Address (Paypout)
+              Seller Wallet Address (Payout)
             </label>
-            <input
-              type="text"
-              id="counterparty"
-              value={counterparty}
-              onChange={(e) => {
-                setCounterparty(e.target.value);
-                if (errors.counterparty) setErrors({ ...errors, counterparty: '' });
-              }}
-              placeholder="0x..."
-              className={`w-full px-2.5 py-2 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
-                errors.counterparty ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-              }`}
-              required
-            />
+            <div className="relative">
+              <input
+                type="text"
+                id="counterparty"
+                value={counterparty}
+                onChange={(e) => {
+                  setCounterparty(e.target.value);
+                  setCounterpartyBlurred(false);
+                  if (errors.counterparty) setErrors({ ...errors, counterparty: '' });
+                }}
+                onBlur={() => setCounterpartyBlurred(true)}
+                onFocus={() => setCounterpartyBlurred(false)}
+                placeholder="0x..."
+                className={`w-full px-2.5 py-2.5 md:py-2 pr-10 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
+                  errors.counterparty ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
+                }`}
+                required
+              />
+              {/* Paste button */}
+              <button
+                type="button"
+                onClick={() => pasteFromClipboard(setCounterparty, 'counterparty')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-white/50 hover:text-white/80 transition-colors"
+                title="Paste from clipboard"
+              >
+                <ClipboardPaste className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Address preview on blur */}
+            {counterpartyBlurred && counterparty && isValidEthAddress(counterparty) && (
+              <p className="mt-0.5 text-[10px] text-white/50 font-mono">{shortenAddress(counterparty)}</p>
+            )}
             {errors.counterparty && (
               <p className="mt-0.5 text-xs text-red-400">{errors.counterparty}</p>
             )}
@@ -542,14 +626,14 @@ export default function CreateEscrowCard() {
             }}
           />
 
-          {/* Advanced */}
+          {/* Advanced - Arbitration */}
           <div>
             <button
               type="button"
               onClick={() => setShowAdvanced((prev) => !prev)}
-              className="flex w-full items-center justify-between text-xs font-semibold text-white/80 hover:text-white transition-colors"
+              className="flex w-full items-center justify-between text-xs font-semibold text-white/80 hover:text-white transition-colors py-1"
             >
-              Arbitration (optional)
+              Add arbitrators (optional)
               <ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
             </button>
 
@@ -651,12 +735,12 @@ export default function CreateEscrowCard() {
           </button>
         </form>
 
-        {/* Info */}
-        <div className="mt-3 p-2.5 bg-white/10 rounded-lg border border-white/20 backdrop-blur-sm">
-          <p className="text-[10px] text-white/80 leading-relaxed">
-            <strong className="text-white">Fees:</strong> 1% fee, capped at $1. Fees are deducted from the seller payout upon resolution.
+        {/* Info - lower contrast on mobile */}
+        <div className="mt-3 p-2.5 bg-white/5 md:bg-white/10 rounded-lg border border-white/10 md:border-white/20 backdrop-blur-sm">
+          <p className="text-[10px] text-white/60 md:text-white/80 leading-relaxed">
+            <strong className="text-white/80 md:text-white">Fees:</strong> 1% fee, capped at $1.
             <br />
-            <strong className="text-white">Caution:</strong> ALWAYS verify escrows on Arbiscan.
+            <strong className="text-white/80 md:text-white">Caution:</strong> Verify on Arbiscan.
           </p>
         </div>
       </div>
