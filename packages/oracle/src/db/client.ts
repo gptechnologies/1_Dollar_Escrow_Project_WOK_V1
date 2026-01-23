@@ -6,9 +6,9 @@ if (!ENV.POSTGRES_URL) {
 }
 
 export const sql = postgres(ENV.POSTGRES_URL, {
-  max: 10,
-  idle_timeout: 20,
-  connect_timeout: 10,
+  max: 2,
+  idle_timeout: 75,
+  connect_timeout: 15,
 });
 
 // Helper to convert hex string to Buffer for BYTEA columns
