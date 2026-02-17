@@ -16,7 +16,9 @@ type TxPageShellProps = {
 
 const SplineHero = dynamic(() => import('@/components/SplineHero'), {
   ssr: false,
-  loading: () => <div className="fixed inset-0 -z-10 bg-[#1a0a2e]" />,
+  loading: () => (
+    <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat" />
+  ),
 });
 
 export default function TxPageShell({ children, title }: TxPageShellProps) {

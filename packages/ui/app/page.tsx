@@ -9,7 +9,9 @@ import { useSearchParams } from 'next/navigation';
 
 const SplineHero = dynamic(() => import('@/components/SplineHero'), {
   ssr: false,
-  loading: () => <div className="fixed inset-0 bg-[#463770] z-0" />,
+  loading: () => (
+    <div className="fixed inset-0 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat z-0" />
+  ),
 });
 
 type HomePrefill = {
