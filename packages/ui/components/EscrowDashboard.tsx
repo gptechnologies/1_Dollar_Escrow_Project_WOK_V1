@@ -31,8 +31,12 @@ type EscrowData = {
   isPartial?: boolean;
 };
 
-export default function EscrowDashboard() {
-  const [query, setQuery] = useState('');
+type EscrowDashboardProps = {
+  initialQuery?: string;
+};
+
+export default function EscrowDashboard({ initialQuery = '' }: EscrowDashboardProps) {
+  const [query, setQuery] = useState(initialQuery);
   const [escrow, setEscrow] = useState<EscrowData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -68,6 +72,12 @@ export default function EscrowDashboard() {
       return () => document.removeEventListener('keydown', handleEscape);
     }
   }, [showFactoryModal]);
+
+  useEffect(() => {
+    if (!initialQuery.trim()) return;
+    setQuery(initialQuery);
+    lookupEscrow(initialQuery);
+  }, [initialQuery]);
 
   const lookupEscrow = async (searchQuery: string) => {
     const trimmed = searchQuery.trim();
@@ -151,7 +161,7 @@ export default function EscrowDashboard() {
   };
 
   return (
-    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5 relative">
+    <div className="surface-card p-5 relative">
       {/* Toast notification */}
       <AnimatePresence>
         {toastMessage && (

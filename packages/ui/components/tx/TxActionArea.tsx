@@ -24,6 +24,7 @@ import {
   getCurrentUrl,
 } from '@/lib/wallet';
 import { ARBITRUM_CHAIN_ID, getArbiscanTxUrl } from '@/lib/chain';
+import { SIMPLE_COPY } from '@/lib/copy';
 import type { EligibilityResult } from './EscrowReviewCard';
 
 type TxActionAreaProps = {
@@ -31,6 +32,7 @@ type TxActionAreaProps = {
   txData: Hex;
   eligibility: EligibilityResult;
   onAddressChange?: (address: string | null) => void;
+  actionLabel?: string;
 };
 
 export default function TxActionArea({ 
@@ -38,6 +40,7 @@ export default function TxActionArea({
   txData, 
   eligibility,
   onAddressChange,
+  actionLabel = 'Sign transaction',
 }: TxActionAreaProps) {
   const wallet = useWalletConnection();
 
@@ -57,6 +60,7 @@ export default function TxActionArea({
       escrowAddress={escrowAddress}
       txData={txData}
       eligibility={eligibility}
+      actionLabel={actionLabel}
     />
   );
 }
@@ -70,9 +74,10 @@ type WalletFlowProps = {
   escrowAddress: Address;
   txData: Hex;
   eligibility: EligibilityResult;
+  actionLabel: string;
 };
 
-function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowProps) {
+function WalletFlow({ wallet, escrowAddress, txData, eligibility, actionLabel }: WalletFlowProps) {
   const { 
     step, 
     address, 
@@ -88,7 +93,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
   // Success state
   if (step === 'success' && txHash) {
     return (
-      <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
+      <div className="surface-card p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-full bg-[#0BB89A]/20 flex items-center justify-center">
             <CheckCircle2 className="w-5 h-5 text-[#0BB89A]" />
@@ -115,7 +120,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
         <div className="flex gap-3">
           <Link 
             href="/"
-            className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/10 text-white font-medium hover:bg-white/15 transition-colors"
+            className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/10 text-white font-medium hover:bg-white/15 active:scale-[0.99] transition-all"
           >
             Back to Dashboard
           </Link>
@@ -123,7 +128,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
             href={getArbiscanTxUrl(txHash)}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#0BB89A] text-white font-medium hover:bg-[#0BB89A]/90 transition-colors"
+            className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#0BB89A] text-white font-medium hover:bg-[#0BB89A]/90 active:scale-[0.99] transition-all"
           >
             View on Arbiscan
             <ExternalLink className="w-4 h-4" />
@@ -136,7 +141,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
   // Error state
   if (step === 'error') {
     return (
-      <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
+      <div className="surface-card p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
             <AlertCircle className="w-5 h-5 text-red-400" />
@@ -149,7 +154,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
 
         <button
           onClick={reset}
-          className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/10 text-white font-medium hover:bg-white/15 transition-colors"
+          className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/10 text-white font-medium hover:bg-white/15 active:scale-[0.99] transition-all"
         >
           <RefreshCw className="w-4 h-4" />
           Try Again
@@ -163,7 +168,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
   const canExecute = eligibility.eligible && step === 'ready' && isOnArbitrum;
 
   return (
-    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
+    <div className="surface-card p-6">
       {/* Step Indicators */}
       <div className="flex items-center gap-2 mb-6">
         <StepIndicator 
@@ -205,7 +210,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
       {step === 'idle' && (
         <button
           onClick={connect}
-          className="w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-xl bg-[#0BB89A] text-white font-semibold hover:bg-[#0BB89A]/90 transition-colors"
+          className="w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-xl bg-[#0BB89A] text-white font-semibold hover:bg-[#0BB89A]/90 active:scale-[0.99] transition-all"
         >
           <Wallet className="w-5 h-5" />
           Connect Wallet
@@ -225,7 +230,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
       {(step === 'switching' || (address && !isOnArbitrum)) && (
         <button
           onClick={switchChain}
-          className="w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-xl bg-yellow-500 text-black font-semibold hover:bg-yellow-400 transition-colors"
+          className="w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-xl bg-yellow-500 text-black font-semibold hover:bg-yellow-400 active:scale-[0.99] transition-all"
         >
           <ArrowRight className="w-5 h-5" />
           Switch to Arbitrum
@@ -238,11 +243,11 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
           disabled={!eligibility.eligible}
           className={`w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-xl font-semibold transition-colors ${
             canExecute
-              ? 'bg-[#0BB89A] text-white hover:bg-[#0BB89A]/90'
+              ? 'bg-[#0BB89A] text-white hover:bg-[#0BB89A]/90 active:scale-[0.99] transition-all'
               : 'bg-white/10 text-white/40 cursor-not-allowed'
           }`}
         >
-          Sign Transaction
+          {actionLabel}
           <ArrowRight className="w-5 h-5" />
         </button>
       )}
@@ -260,7 +265,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility }: WalletFlowPr
       {/* Eligibility warning */}
       {!eligibility.eligible && step === 'ready' && (
         <p className="mt-3 text-sm text-center text-red-300/80">
-          Cannot execute: Check eligibility requirements above
+          {SIMPLE_COPY.cannotExecute}
         </p>
       )}
     </div>
@@ -275,21 +280,21 @@ function MobileDeepLinks() {
   const currentUrl = typeof window !== 'undefined' ? getCurrentUrl() : '';
 
   return (
-    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
+    <div className="surface-card p-6">
       <div className="flex items-center gap-3 mb-4">
         <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
           <Wallet className="w-5 h-5 text-white/70" />
         </div>
         <div>
           <h3 className="text-lg font-semibold text-white">Open in Wallet</h3>
-          <p className="text-sm text-white/60">No wallet detected - open this page in your wallet app</p>
+          <p className="text-sm text-white/60">{SIMPLE_COPY.mobileWalletHint}</p>
         </div>
       </div>
 
       <div className="space-y-3">
         <a
           href={buildMetaMaskDeepLink(currentUrl)}
-          className="w-full inline-flex items-center justify-center gap-3 px-4 py-4 rounded-xl bg-[#F6851B]/10 border border-[#F6851B]/30 text-white font-semibold hover:bg-[#F6851B]/20 transition-colors"
+          className="w-full inline-flex items-center justify-center gap-3 px-4 py-4 rounded-xl bg-[#F6851B]/10 border border-[#F6851B]/30 text-white font-semibold hover:bg-[#F6851B]/20 active:scale-[0.99] transition-all"
         >
           <MetaMaskIcon />
           Open in MetaMask
@@ -298,7 +303,7 @@ function MobileDeepLinks() {
 
         <a
           href={buildCoinbaseWalletDeepLink(currentUrl)}
-          className="w-full inline-flex items-center justify-center gap-3 px-4 py-4 rounded-xl bg-[#0052FF]/10 border border-[#0052FF]/30 text-white font-semibold hover:bg-[#0052FF]/20 transition-colors"
+          className="w-full inline-flex items-center justify-center gap-3 px-4 py-4 rounded-xl bg-[#0052FF]/10 border border-[#0052FF]/30 text-white font-semibold hover:bg-[#0052FF]/20 active:scale-[0.99] transition-all"
         >
           <CoinbaseWalletIcon />
           Open in Coinbase Wallet

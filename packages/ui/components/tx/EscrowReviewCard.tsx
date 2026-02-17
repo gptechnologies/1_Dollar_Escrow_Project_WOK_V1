@@ -15,6 +15,7 @@ import {
   formatTimestamp,
   getTimeRemaining,
 } from '@/lib/chain';
+import { derivePhaseFromFlags, getStageGuidance, StagePill, StageProgress } from '@/components/escrowStage';
 
 type ActionType = 'confirm' | 'finalize' | 'sweep';
 
@@ -59,9 +60,19 @@ export default function EscrowReviewCard({
 }: EscrowReviewCardProps) {
   const actionInfo = ACTION_INFO[action];
   const eligibility = checkEligibility(escrow, action, connectedAddress);
+  const phase = derivePhaseFromFlags({
+    confirmed: escrow.confirmed,
+    isFunded: escrow.isFunded,
+    resolved: escrow.resolved,
+    expired: escrow.expired,
+  });
+  const stageGuidance = getStageGuidance(phase, {
+    buyerAddress: escrow.funder,
+    sellerAddress: escrow.payout,
+  });
 
   return (
-    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden">
+    <div className="surface-card overflow-hidden">
       {/* Header */}
       <div className="px-6 py-4 border-b border-white/10">
         <h2 className="text-lg font-semibold text-white">{actionInfo.title}</h2>
@@ -137,15 +148,21 @@ export default function EscrowReviewCard({
 
         {/* Status Flags */}
         <div className="pt-2 border-t border-white/10">
-          <h3 className="text-sm font-medium text-white/70 mb-3">Current Status</h3>
-          <div className="flex flex-wrap gap-2">
-            <StatusBadge label="Confirmed" active={escrow.confirmed} />
-            <StatusBadge label="Funded" active={escrow.isFunded} />
-            <StatusBadge label="Resolved" active={escrow.resolved} variant="terminal" />
-            <StatusBadge label="Expired" active={escrow.expired} variant="terminal" />
+          <h3 className="text-sm font-medium text-white/70 mb-2">Current Stage</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <StagePill phase={phase} />
             {escrow.arbitratorCount > 0 && (
-              <StatusBadge label={`${escrow.arbitratorCount} Arbitrator${escrow.arbitratorCount > 1 ? 's' : ''}`} active />
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-white/10 text-white/70">
+                {escrow.arbitratorCount} Arbitrator{escrow.arbitratorCount > 1 ? 's' : ''}
+              </span>
             )}
+          </div>
+          <StageProgress phase={phase} />
+          <div className="mt-3 rounded-lg bg-white/10 border border-white/15 p-3">
+            <p className="text-sm text-white/90">{stageGuidance.headline}</p>
+            <p className="text-xs text-white/70 mt-1">
+              <span className="font-semibold text-white/90">Next:</span> {stageGuidance.instruction}
+            </p>
           </div>
         </div>
 
@@ -198,7 +215,7 @@ function DetailRow({
   };
 
   return (
-    <div className={`rounded-lg p-3 ${highlight ? 'bg-[#0BB89A]/10 border border-[#0BB89A]/30' : 'bg-white/5'}`}>
+    <div className={`rounded-lg p-3 ${highlight ? 'bg-[#0BB89A]/10 border border-[#0BB89A]/30' : 'surface-subtle'}`}>
       <div className="text-xs text-white/50 mb-1">{label}</div>
       <div className="flex items-center gap-2">
         <span className={`font-mono text-sm ${isAddress ? 'text-white/80' : 'text-white'}`}>
@@ -236,32 +253,6 @@ function DetailRow({
         </div>
       )}
     </div>
-  );
-}
-
-type StatusBadgeProps = {
-  label: string;
-  active: boolean;
-  variant?: 'default' | 'terminal';
-};
-
-function StatusBadge({ label, active, variant = 'default' }: StatusBadgeProps) {
-  if (!active) {
-    return (
-      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-white/5 text-white/40">
-        {label}
-      </span>
-    );
-  }
-
-  const colorClass = variant === 'terminal' 
-    ? 'bg-red-500/20 text-red-300' 
-    : 'bg-[#0BB89A]/20 text-[#0BB89A]';
-
-  return (
-    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${colorClass}`}>
-      {label}
-    </span>
   );
 }
 

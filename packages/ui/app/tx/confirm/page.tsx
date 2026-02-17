@@ -9,16 +9,19 @@
 import { useSearchParams } from 'next/navigation';
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { type Address } from 'viem';
+import ShareModal from '@/components/ShareModal';
 import TxPageShell from '@/components/tx/TxPageShell';
 import EscrowReviewCard, { checkEligibility, type ActionType } from '@/components/tx/EscrowReviewCard';
 import TxActionArea from '@/components/tx/TxActionArea';
 import { readEscrowState, isValidAddress, type EscrowState } from '@/lib/chain';
 import { encodeConfirmTx } from '@/lib/wallet';
+import { buildShareUrl } from '@/lib/share';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 function ConfirmPageContent() {
   const searchParams = useSearchParams();
   const escrowParam = searchParams.get('escrow');
+  const codeParam = searchParams.get('code');
 
   const [escrow, setEscrow] = useState<EscrowState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,10 +107,32 @@ function ConfirmPageContent() {
   const action: ActionType = 'confirm';
   const eligibility = checkEligibility(escrow, action, connectedAddress);
   const txData = encodeConfirmTx();
+  const confirmShareUrl = codeParam
+    ? buildShareUrl(codeParam, { action: 'confirm', role: 'seller' })
+    : null;
 
   return (
     <TxPageShell title="Confirm Escrow">
       <div className="space-y-6">
+        <div className="surface-card p-6">
+          <div className="flex items-center justify-between gap-4 mb-2">
+            <h3 className="text-lg font-semibold text-white">Before you sign</h3>
+            {confirmShareUrl && (
+              <ShareModal
+                shareUrl={confirmShareUrl}
+                title="Share confirm link"
+                description="Send this to the seller so they can confirm escrow."
+                triggerLabel="Share"
+              />
+            )}
+          </div>
+          <ul className="space-y-2 text-sm text-white/70">
+            <li><span className="text-white font-medium">Who should sign:</span> the seller wallet only.</li>
+            <li><span className="text-white font-medium">What this does:</span> marks escrow as confirmed.</li>
+            <li><span className="text-white font-medium">What happens next:</span> buyer can fund this escrow.</li>
+          </ul>
+        </div>
+
         {/* Review Card */}
         <EscrowReviewCard 
           escrow={escrow} 
@@ -121,11 +146,12 @@ function ConfirmPageContent() {
           txData={txData}
           eligibility={eligibility}
           onAddressChange={handleAddressChange}
+          actionLabel="Confirm escrow"
         />
 
         {/* Additional Info */}
-        <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
-          <h3 className="text-sm font-medium text-white/70 mb-3">What happens when you confirm?</h3>
+        <div className="surface-card p-6">
+          <h3 className="text-sm font-medium text-white/70 mb-3">After confirmation</h3>
           <ul className="space-y-2 text-sm text-white/60">
             <li className="flex items-start gap-2">
               <span className="text-[#0BB89A] font-bold">1.</span>

@@ -9,16 +9,19 @@
 import { useSearchParams } from 'next/navigation';
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { type Address } from 'viem';
+import ShareModal from '@/components/ShareModal';
 import TxPageShell from '@/components/tx/TxPageShell';
 import EscrowReviewCard, { checkEligibility, type ActionType } from '@/components/tx/EscrowReviewCard';
 import TxActionArea from '@/components/tx/TxActionArea';
 import { readEscrowState, isValidAddress, formatTokenAmount, type EscrowState } from '@/lib/chain';
 import { encodeFinalizeTx } from '@/lib/wallet';
+import { buildShareUrl } from '@/lib/share';
 import { AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 
 function FinalizePageContent() {
   const searchParams = useSearchParams();
   const escrowParam = searchParams.get('escrow');
+  const codeParam = searchParams.get('code');
 
   const [escrow, setEscrow] = useState<EscrowState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +107,7 @@ function FinalizePageContent() {
   const action: ActionType = 'finalize';
   const eligibility = checkEligibility(escrow, action, connectedAddress);
   const txData = encodeFinalizeTx();
+  const finalizeShareUrl = codeParam ? buildShareUrl(codeParam, { action: 'finalize' }) : null;
 
   // Calculate payout amounts (fee is 1% capped at $1)
   const targetAmount = escrow.targetAmount;
@@ -119,6 +123,25 @@ function FinalizePageContent() {
   return (
     <TxPageShell title="Finalize Escrow">
       <div className="space-y-6">
+        <div className="surface-card p-6">
+          <div className="flex items-center justify-between gap-4 mb-2">
+            <h3 className="text-lg font-semibold text-white">Before you sign</h3>
+            {finalizeShareUrl && (
+              <ShareModal
+                shareUrl={finalizeShareUrl}
+                title="Share finalize link"
+                description="Anyone can call finalize when escrow is payable."
+                triggerLabel="Share"
+              />
+            )}
+          </div>
+          <ul className="space-y-2 text-sm text-white/70">
+            <li><span className="text-white font-medium">Who can sign:</span> anyone when finalize conditions are met.</li>
+            <li><span className="text-white font-medium">What this does:</span> releases escrow funds to the seller.</li>
+            <li><span className="text-white font-medium">What happens next:</span> escrow is marked complete.</li>
+          </ul>
+        </div>
+
         {/* Payout Preview */}
         <div className="bg-[#0BB89A]/10 border border-[#0BB89A]/30 rounded-2xl p-6">
           <h3 className="text-sm font-medium text-[#0BB89A] mb-4">Payout Preview</h3>
@@ -158,11 +181,12 @@ function FinalizePageContent() {
           txData={txData}
           eligibility={eligibility}
           onAddressChange={handleAddressChange}
+          actionLabel="Finalize and release funds"
         />
 
         {/* Additional Info */}
-        <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
-          <h3 className="text-sm font-medium text-white/70 mb-3">What happens when you finalize?</h3>
+        <div className="surface-card p-6">
+          <h3 className="text-sm font-medium text-white/70 mb-3">After finalization</h3>
           <ul className="space-y-2 text-sm text-white/60">
             <li className="flex items-start gap-2">
               <span className="text-[#0BB89A] font-bold">1.</span>

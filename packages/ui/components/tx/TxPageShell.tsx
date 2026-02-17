@@ -5,7 +5,7 @@
 
 'use client';
 
-import Image from 'next/image';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { ReactNode } from 'react';
 
@@ -14,24 +14,16 @@ type TxPageShellProps = {
   title?: string;
 };
 
+const SplineHero = dynamic(() => import('@/components/SplineHero'), {
+  ssr: false,
+  loading: () => <div className="fixed inset-0 -z-10 bg-[#1a0a2e]" />,
+});
+
 export default function TxPageShell({ children, title }: TxPageShellProps) {
   return (
     <main className="min-h-screen relative overflow-hidden">
-      {/* Static gradient background */}
-      <div 
-        className="fixed inset-0 -z-10"
-        style={{
-          background: 'linear-gradient(135deg, #1a0a2e 0%, #16082a 40%, #0d0618 100%)',
-        }}
-      />
-      
-      {/* Subtle animated gradient overlay */}
-      <div 
-        className="fixed inset-0 -z-10 opacity-30"
-        style={{
-          background: 'radial-gradient(ellipse at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%), radial-gradient(ellipse at 80% 70%, rgba(11, 184, 154, 0.1) 0%, transparent 50%)',
-        }}
-      />
+      <SplineHero />
+      <div className="fixed inset-0 -z-10 bg-black/35" />
 
       {/* Content */}
       <div className="relative z-10 min-h-screen flex flex-col">
@@ -39,13 +31,6 @@ export default function TxPageShell({ children, title }: TxPageShellProps) {
         <header className="w-full px-4 py-6">
           <div className="max-w-4xl mx-auto">
             <Link href="/" className="inline-flex items-center gap-2 group">
-              <Image 
-                src="/Crow Logo Isolated Black.png" 
-                alt="Crow Logo" 
-                width={64} 
-                height={64}
-                className="transition-transform group-hover:scale-105"
-              />
               <div className="relative">
                 <span className="text-2xl font-bold text-white">Crow</span>
                 <span className="absolute left-0 top-full text-xs text-white/60 whitespace-nowrap">

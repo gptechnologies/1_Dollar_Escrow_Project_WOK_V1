@@ -1,12 +1,37 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import CreateEscrowCard from '@/components/CreateEscrowCard';
-import SplineHero from '@/components/SplineHero';
 import EscrowDashboard from '@/components/EscrowDashboard';
 import InfoAccordion from '@/components/InfoAccordion';
-import Image from 'next/image';
+import { useSearchParams } from 'next/navigation';
+
+const SplineHero = dynamic(() => import('@/components/SplineHero'), {
+  ssr: false,
+  loading: () => <div className="fixed inset-0 bg-[#463770] z-0" />,
+});
+
+type HomePrefill = {
+  amount?: string;
+  token?: string;
+  funder?: string;
+  payout?: string;
+  deadlineDate?: string;
+  deadlineTime?: string;
+};
 
 export default function Home() {
+  const searchParams = useSearchParams();
+  const prefillCreate: HomePrefill = {
+    amount: searchParams.get('amount') ?? undefined,
+    token: searchParams.get('token') ?? undefined,
+    funder: searchParams.get('funder') ?? undefined,
+    payout: searchParams.get('payout') ?? undefined,
+    deadlineDate: searchParams.get('deadlineDate') ?? undefined,
+    deadlineTime: searchParams.get('deadlineTime') ?? undefined,
+  };
+  const prefillLookup = searchParams.get('code') ?? searchParams.get('escrow') ?? '';
+
   return (
     <main className="min-h-screen relative">
       {/* Global Spline Background (fixed, covers entire page) */}
@@ -23,15 +48,7 @@ export default function Home() {
               {/* Mobile Hero (< md) */}
               <div className="md:hidden flex flex-col items-center text-center gap-2 pb-4">
                 <p className="text-xs text-white/60">No sign up required</p>
-                <div className="flex items-center gap-2">
-                  <Image 
-                    src="/Crow Logo Isolated Black.png" 
-                    alt="Crow Logo" 
-                    width={40} 
-                    height={40} 
-                  />
-                  <h1 className="text-3xl font-bold text-white">Crow</h1>
-                </div>
+                <h1 className="text-3xl font-bold text-white">Crow</h1>
                 <p className="text-sm text-white/70">
                   Instant escrow for <span className="text-[#0BB89A]">USDC/USDT</span> on Arbitrum
                 </p>
@@ -39,17 +56,9 @@ export default function Home() {
 
               {/* Desktop Hero (>= md) */}
               <div className="hidden md:flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <Image 
-                    src="/Crow Logo Isolated Black.png" 
-                    alt="Crow Logo" 
-                    width={64} 
-                    height={64} 
-                  />
-                  <div className="relative">
-                    <span className="text-2xl font-bold text-white">Crow</span>
-                    <span className="absolute left-0 top-full text-xs text-white/60 whitespace-nowrap">The simplest P2P escrow service</span>
-                  </div>
+                <div className="relative">
+                  <span className="text-2xl font-bold text-white">Crow</span>
+                  <span className="absolute left-0 top-full text-xs text-white/60 whitespace-nowrap">The simplest P2P escrow service</span>
                 </div>
                 <p className="text-sm md:text-base font-medium text-white/80 text-center flex-1">
                   No sign up required. <span className="text-[#0BB89A]">*Supports USDC or USDT on the ARBITRUM network*</span>
@@ -63,14 +72,14 @@ export default function Home() {
                 
                 {/* LEFT: Existing Card (Margins preserved) */}
                 <div className="flex-shrink-0 mx-auto md:mx-0">
-                  <CreateEscrowCard />
+                  <CreateEscrowCard initialValues={prefillCreate} />
                 </div>
 
                 {/* RIGHT: How It Works panel - hidden on mobile, shown on desktop */}
                 <div className="hidden lg:flex flex-1 max-w-2xl flex-col justify-between">
                   
                   {/* Top Info Box - right-aligned on desktop */}
-                  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5 w-[320px] ml-auto">
+                  <div className="surface-card p-5 w-[320px] ml-auto">
                     <h3 className="text-lg font-semibold text-white mb-2">How It Works</h3>
                     <ul className="space-y-2 text-sm text-white/70">
                       <li className="flex items-start gap-2">
@@ -101,7 +110,7 @@ export default function Home() {
         {/* ==================== SECTION 2: Escrow Lookup ==================== */}
         <section className="px-4 pt-8 md:pt-16 pb-8 md:pb-12">
           <div className="max-w-6xl mx-auto">
-            <EscrowDashboard />
+            <EscrowDashboard initialQuery={prefillLookup} />
           </div>
         </section>
 
@@ -160,7 +169,7 @@ export default function Home() {
                   content: (
                     <>
                       <p className="mb-4">
-                        Dive deeper into the technical architecture, smart contract logic, security principles, and future vision of Temp-Escrow. Our whitepaper outlines how we leverage the Arbitrum network for efficient and secure P2P transactions.
+                        Dive deeper into the technical architecture, smart contract logic, security principles, and future vision of Crow. Our whitepaper outlines how we leverage the Arbitrum network for efficient and secure P2P transactions.
                       </p>
                       <p>
                         <a
@@ -195,7 +204,7 @@ export default function Home() {
                     <>
                       <div className="space-y-4">
                         <div>
-                          <h4 className="text-white font-semibold mb-2">Q: What network does Temp-Escrow use?</h4>
+                          <h4 className="text-white font-semibold mb-2">Q: What network does Crow use?</h4>
                           <p>A: We currently operate exclusively on the Arbitrum network for USDC transactions.</p>
                         </div>
                         <div>
@@ -207,8 +216,8 @@ export default function Home() {
                           <p>A: Currently, only USDC is supported. We plan to add more tokens in the future.</p>
                         </div>
                         <div>
-                          <h4 className="text-white font-semibold mb-2">Q: What happens if there's a dispute?</h4>
-                          <p>A: Temp-Escrow does not arbitrate disputes. It's crucial to transact with trusted parties and have separate agreements in place.</p>
+                          <h4 className="text-white font-semibold mb-2">Q: What happens if there&apos;s a dispute?</h4>
+                          <p>A: Crow does not arbitrate disputes. It&apos;s crucial to transact with trusted parties and have separate agreements in place.</p>
                         </div>
                       </div>
                     </>

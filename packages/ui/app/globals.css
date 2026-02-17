@@ -138,3 +138,17 @@ canvas {
     @apply bg-background text-foreground;
   }
 }
+
+@layer components {
+  .surface-card {
+    @apply bg-white/10 backdrop-blur-xl border border-white/15 rounded-2xl shadow-lg shadow-black/20;
+  }
+
+  .surface-subtle {
+    @apply bg-white/8 backdrop-blur-md border border-white/12 rounded-xl;
+  }
+
+  .surface-input {
+    @apply bg-white/15 backdrop-blur-sm border border-white/30;
+  }
+}

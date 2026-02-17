@@ -1,0 +1,15 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1A0A2E"/>
+      <stop offset="1" stop-color="#0D0618"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="934" cy="156" r="220" fill="#6D28D9" fill-opacity="0.18"/>
+  <circle cx="246" cy="556" r="260" fill="#0BB89A" fill-opacity="0.16"/>
+  <rect x="110" y="164" width="980" height="302" rx="32" fill="white" fill-opacity="0.08" stroke="white" stroke-opacity="0.18" stroke-width="2"/>
+  <text x="160" y="274" fill="white" font-size="72" font-family="Arial, Helvetica, sans-serif" font-weight="700">Crow Escrow</text>
+  <text x="160" y="342" fill="#D1D5DB" font-size="34" font-family="Arial, Helvetica, sans-serif">The easiest way to complete an escrow.</text>
+  <text x="160" y="396" fill="#0BB89A" font-size="30" font-family="Arial, Helvetica, sans-serif" font-weight="600">USDC / USDT on Arbitrum</text>
+</svg>

@@ -7,7 +7,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { encodeFunctionData, type Address, type Hex } from 'viem';
-import { ARBITRUM_CHAIN_ID, EscrowABI } from './chain';
+import { ARBITRUM_CHAIN_ID, EscrowABI, ERC20ABI } from './chain';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -257,6 +257,17 @@ export function encodeSweepTx(): Hex {
   return encodeFunctionData({
     abi: EscrowABI,
     functionName: 'sweepToTreasury',
+  });
+}
+
+/**
+ * Encode ERC20 transfer(to, amount) for funding escrow.
+ */
+export function encodeFundEscrowTx(escrowAddress: Address, amount: bigint): Hex {
+  return encodeFunctionData({
+    abi: ERC20ABI,
+    functionName: 'transfer',
+    args: [escrowAddress, amount],
   });
 }
 

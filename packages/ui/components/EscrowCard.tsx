@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Copy,
@@ -13,8 +13,15 @@ import {
   ArrowRight,
   CheckCircle2,
   Shield,
+  ClipboardPaste,
+  Fingerprint,
+  X,
 } from 'lucide-react';
 import { getArbiscanAddressUrl } from '@/lib/chain';
+import { buildShareUrl } from '@/lib/share';
+import { SIMPLE_COPY } from '@/lib/copy';
+import { getStageGuidance, normalizePhaseName, StagePill, StageProgress, type PhaseKey } from './escrowStage';
+import ShareModal from './ShareModal';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -50,15 +57,6 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const TOKEN_SYMBOLS: Record<string, string> = {
   '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 'USDC',
   '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': 'USDT',
-};
-
-export const PHASE_STYLES: Record<string, string> = {
-  AwaitingConfirmation: 'bg-yellow-500/20 text-yellow-300',
-  ConfirmedAwaitingFunding: 'bg-blue-500/20 text-blue-300',
-  Funded: 'bg-emerald-500/20 text-emerald-300',
-  Resolved: 'bg-white/10 text-white/60',
-  Expired: 'bg-red-500/20 text-red-300',
-  Unknown: 'bg-white/10 text-white/70',
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -195,6 +193,154 @@ function DetailRow({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Wallet Matcher
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type MatchResult = { role: string; address: string } | null;
+
+function useWalletMatcher(addresses: { role: string; address: string }[]) {
+  const [input, setInput] = useState('');
+
+  const match: MatchResult = (() => {
+    const trimmed = input.trim().toLowerCase();
+    if (!trimmed || !/^0x[a-fA-F0-9]{40}$/.test(input.trim())) return null;
+    for (const entry of addresses) {
+      if (entry.address.toLowerCase() === trimmed) return entry;
+    }
+    return null;
+  })();
+
+  const hasInput = input.trim().length > 0;
+  const noMatch = hasInput && /^0x[a-fA-F0-9]{40}$/.test(input.trim()) && !match;
+
+  return { input, setInput, match, hasInput, noMatch };
+}
+
+type WalletMatchBarProps = {
+  input: string;
+  setInput: (v: string) => void;
+  match: MatchResult;
+  noMatch: boolean;
+};
+
+function WalletMatchBar({ input, setInput, match, noMatch }: WalletMatchBarProps) {
+  const handlePaste = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      setInput(text.trim());
+    } catch { /* clipboard unavailable */ }
+  }, [setInput]);
+
+  return (
+    <div className="mb-3">
+      <div className="flex items-center gap-1.5 text-[11px] text-white/50 mb-1.5">
+        <Fingerprint className="w-3 h-3" />
+        Verify your wallet
+      </div>
+      <div className="relative flex items-center">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Paste your address to verify role"
+          className={`w-full pl-3 pr-20 py-2 rounded-lg font-mono text-xs transition-all surface-input focus:outline-none focus:ring-2 text-white placeholder:text-white/35 ${
+            match
+              ? 'border-[#0BB89A]/60 focus:ring-[#0BB89A]/40 bg-[#0BB89A]/10'
+              : noMatch
+                ? 'border-red-400/50 focus:ring-red-400/30 bg-red-500/5'
+                : 'focus:ring-[#0BB89A]/30'
+          }`}
+        />
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+          {input && (
+            <button
+              type="button"
+              onClick={() => setInput('')}
+              className="p-1 text-white/40 hover:text-white/70 transition-colors"
+              title="Clear"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handlePaste}
+            className="p-1 text-white/40 hover:text-white/70 transition-colors"
+            title="Paste from clipboard"
+          >
+            <ClipboardPaste className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Match result */}
+      {match && (
+        <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-[#0BB89A]/15 border border-[#0BB89A]/30">
+          <CheckCircle2 className="w-3.5 h-3.5 text-[#0BB89A] shrink-0" />
+          <span className="text-xs text-[#0BB89A] font-medium">
+            Match — You are the <span className="font-bold">{match.role}</span>
+          </span>
+        </div>
+      )}
+      {noMatch && (
+        <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/25">
+          <X className="w-3.5 h-3.5 text-red-400 shrink-0" />
+          <span className="text-xs text-red-300">
+            No match — This address is not a party in this escrow
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Party Row (with match highlight)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type PartyRowProps = {
+  role: string;
+  address: string;
+  isMatch: boolean;
+};
+
+function PartyRow({ role, address, isMatch }: PartyRowProps) {
+  return (
+    <div
+      className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 rounded-lg px-2.5 py-2 -mx-2.5 transition-colors ${
+        isMatch ? 'bg-[#0BB89A]/10 ring-1 ring-[#0BB89A]/30' : ''
+      }`}
+    >
+      <div className={`flex items-center gap-1.5 text-[11px] w-16 shrink-0 ${
+        isMatch ? 'text-[#0BB89A]' : 'text-white/50'
+      }`}>
+        <User className="w-3 h-3" />
+        {role}
+        {isMatch && <Check className="w-3 h-3 text-[#0BB89A]" />}
+      </div>
+      <div className="flex items-center gap-1 min-w-0">
+        <code className={`font-mono text-xs break-all sm:truncate ${
+          isMatch ? 'text-[#0BB89A]' : 'text-white/80'
+        }`}>
+          <span className="sm:hidden">{shortenAddress(address)}</span>
+          <span className="hidden sm:inline">{address}</span>
+        </code>
+        <CopyButton value={address} />
+        <a
+          href={getArbiscanAddressUrl(address)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="p-1.5 rounded hover:bg-white/10 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center shrink-0"
+          title="View on Arbiscan"
+        >
+          <ExternalLink className="w-3.5 h-3.5 text-white/50 hover:text-white/80" />
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Main Component
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -216,7 +362,7 @@ export default function EscrowCard({
   isPartial,
 }: EscrowCardProps) {
   const phaseLabel = phaseName || `Phase ${phase}`;
-  const phaseClass = PHASE_STYLES[phaseLabel] || PHASE_STYLES.Unknown;
+  const phaseKey = normalizePhaseName(phaseLabel);
   const tokenSymbol = token ? getTokenSymbol(token) : 'USDC';
 
   const hasArbitrators = (arbitratorCount ?? 0) > 0;
@@ -224,8 +370,27 @@ export default function EscrowCard({
   const arb2Valid = arbitrator2 && arbitrator2 !== ZERO_ADDRESS;
   const arb3Valid = arbitrator3 && arbitrator3 !== ZERO_ADDRESS;
 
+  // Build the matchable addresses list
+  const matchAddresses = [
+    { role: 'Buyer', address: funder },
+    { role: 'Seller', address: payout },
+    ...(arb1Valid ? [{ role: 'Arbitrator #1', address: arbitrator1 }] : []),
+    ...(arb2Valid ? [{ role: 'Arbitrator #2', address: arbitrator2 }] : []),
+    ...(arb3Valid ? [{ role: 'Arbitrator #3', address: arbitrator3 }] : []),
+  ];
+
+  const matcher = useWalletMatcher(matchAddresses);
+  const inputLower = matcher.input.trim().toLowerCase();
+  const confirmShareUrl = buildShareUrl(code, { action: 'confirm', role: 'seller' });
+  const fundShareUrl = buildShareUrl(code, { action: 'fund', role: 'buyer' });
+  const finalizeShareUrl = buildShareUrl(code, { action: 'finalize' });
+  const stageGuidance = getStageGuidance(phaseKey, {
+    buyerAddress: funder,
+    sellerAddress: payout,
+  });
+
   return (
-    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden">
+    <div className="surface-card overflow-hidden">
       {/* Header: Escrow Address + Phase */}
       <div className="px-4 py-3 border-b border-white/10">
         <div className="flex items-start justify-between gap-3">
@@ -247,11 +412,15 @@ export default function EscrowCard({
               </a>
             </div>
           </div>
-          <span
-            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap shrink-0 ${phaseClass}`}
-          >
-            {phaseLabel}
-          </span>
+          <StagePill phase={phaseKey} />
+        </div>
+        <StageProgress phase={phaseKey} />
+        <div className="mt-3 rounded-lg bg-white/10 border border-white/15 p-3">
+          <p className="text-sm text-white/90 font-medium">{stageGuidance.headline}</p>
+          <p className="text-xs text-white/70 mt-1">
+            <span className="text-white/90 font-semibold">{SIMPLE_COPY.nextPrefix}</span> {stageGuidance.instruction}
+          </p>
+          <p className="text-xs text-white/55 mt-1">{stageGuidance.afterAction}</p>
         </div>
       </div>
 
@@ -283,52 +452,18 @@ export default function EscrowCard({
         <div className="text-[11px] text-white/40 uppercase tracking-wide mb-3">
           Parties
         </div>
-        <div className="space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <div className="flex items-center gap-1.5 text-[11px] text-white/50 w-16 shrink-0">
-              <User className="w-3 h-3" />
-              Buyer
-            </div>
-            <div className="flex items-center gap-1 min-w-0">
-              <code className="font-mono text-xs text-white/80 break-all sm:truncate">
-                <span className="sm:hidden">{shortenAddress(funder)}</span>
-                <span className="hidden sm:inline">{funder}</span>
-              </code>
-              <CopyButton value={funder} />
-              <a
-                href={getArbiscanAddressUrl(funder)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-1.5 rounded hover:bg-white/10 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center shrink-0"
-                title="View on Arbiscan"
-              >
-                <ExternalLink className="w-3.5 h-3.5 text-white/50 hover:text-white/80" />
-              </a>
-            </div>
-          </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <div className="flex items-center gap-1.5 text-[11px] text-white/50 w-16 shrink-0">
-              <User className="w-3 h-3" />
-              Seller
-            </div>
-            <div className="flex items-center gap-1 min-w-0">
-              <code className="font-mono text-xs text-white/80 break-all sm:truncate">
-                <span className="sm:hidden">{shortenAddress(payout)}</span>
-                <span className="hidden sm:inline">{payout}</span>
-              </code>
-              <CopyButton value={payout} />
-              <a
-                href={getArbiscanAddressUrl(payout)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-1.5 rounded hover:bg-white/10 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center shrink-0"
-                title="View on Arbiscan"
-              >
-                <ExternalLink className="w-3.5 h-3.5 text-white/50 hover:text-white/80" />
-              </a>
-            </div>
-          </div>
+        {/* Wallet matcher input */}
+        <WalletMatchBar
+          input={matcher.input}
+          setInput={matcher.setInput}
+          match={matcher.match}
+          noMatch={matcher.noMatch}
+        />
+
+        <div className="space-y-1">
+          <PartyRow role="Buyer" address={funder} isMatch={funder.toLowerCase() === inputLower} />
+          <PartyRow role="Seller" address={payout} isMatch={payout.toLowerCase() === inputLower} />
         </div>
       </div>
 
@@ -346,37 +481,15 @@ export default function EscrowCard({
               </span>
             )}
           </div>
-          <div className="space-y-2">
+          <div className="space-y-1">
             {arb1Valid && (
-              <div className="flex items-center gap-1 min-w-0">
-                <span className="text-[11px] text-white/50 w-4 shrink-0">1.</span>
-                <code className="font-mono text-xs text-white/70 break-all sm:truncate">
-                  <span className="sm:hidden">{shortenAddress(arbitrator1)}</span>
-                  <span className="hidden sm:inline">{arbitrator1}</span>
-                </code>
-                <CopyButton value={arbitrator1} />
-              </div>
+              <ArbRow num={1} address={arbitrator1} isMatch={arbitrator1.toLowerCase() === inputLower} />
             )}
             {arb2Valid && (
-              <div className="flex items-center gap-1 min-w-0">
-                <span className="text-[11px] text-white/50 w-4 shrink-0">2.</span>
-                <code className="font-mono text-xs text-white/70 break-all sm:truncate">
-                  <span className="sm:hidden">{shortenAddress(arbitrator2)}</span>
-                  <span className="hidden sm:inline">{arbitrator2}</span>
-                </code>
-                <CopyButton value={arbitrator2} />
-              </div>
+              <ArbRow num={2} address={arbitrator2} isMatch={arbitrator2.toLowerCase() === inputLower} />
             )}
             {arb3Valid && (
-              <div className="flex items-center gap-1 min-w-0">
-                <span className="text-[11px] text-white/50 w-4 shrink-0">3.</span>
-                <code className="font-mono text-xs text-white/70 break-all sm:truncate">
-                  <span className="sm:hidden">{shortenAddress(arbitrator3)}</span>
-                  <span className="hidden sm:inline">{arbitrator3}</span>
-                </code>
-                <CopyButton value={arbitrator3} />
-                <span className="text-[10px] text-white/40 ml-1">(tiebreaker)</span>
-              </div>
+              <ArbRow num={3} address={arbitrator3} isMatch={arbitrator3.toLowerCase() === inputLower} suffix="(tiebreaker)" />
             )}
           </div>
           {arbitratorCount === 3 && (
@@ -399,8 +512,47 @@ export default function EscrowCard({
 
       {/* Action Footer */}
       <div className="px-4 py-3">
-        <PhaseActionButton phaseName={phaseLabel} escrowAddress={escrow} />
+        <PhaseActionButton
+          phaseKey={phaseKey}
+          escrowAddress={escrow}
+          code={code}
+          confirmShareUrl={confirmShareUrl}
+          fundShareUrl={fundShareUrl}
+          finalizeShareUrl={finalizeShareUrl}
+        />
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Arbitrator Row (with match highlight)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type ArbRowProps = {
+  num: number;
+  address: string;
+  isMatch: boolean;
+  suffix?: string;
+};
+
+function ArbRow({ num, address, isMatch, suffix }: ArbRowProps) {
+  return (
+    <div
+      className={`flex items-center gap-1 min-w-0 rounded-lg px-2.5 py-1.5 -mx-2.5 transition-colors ${
+        isMatch ? 'bg-[#0BB89A]/10 ring-1 ring-[#0BB89A]/30' : ''
+      }`}
+    >
+      <span className={`text-[11px] w-4 shrink-0 ${isMatch ? 'text-[#0BB89A]' : 'text-white/50'}`}>
+        {num}.
+      </span>
+      <code className={`font-mono text-xs break-all sm:truncate ${isMatch ? 'text-[#0BB89A]' : 'text-white/70'}`}>
+        <span className="sm:hidden">{shortenAddress(address)}</span>
+        <span className="hidden sm:inline">{address}</span>
+      </code>
+      <CopyButton value={address} />
+      {isMatch && <Check className="w-3 h-3 text-[#0BB89A] shrink-0" />}
+      {suffix && <span className="text-[10px] text-white/40 ml-1">{suffix}</span>}
     </div>
   );
 }
@@ -410,38 +562,80 @@ export default function EscrowCard({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 type PhaseActionButtonProps = {
-  phaseName: string;
+  phaseKey: PhaseKey;
   escrowAddress: string;
+  code: string;
+  confirmShareUrl: string;
+  fundShareUrl: string;
+  finalizeShareUrl: string;
 };
 
-function PhaseActionButton({ phaseName, escrowAddress }: PhaseActionButtonProps) {
-  switch (phaseName) {
+function PhaseActionButton({
+  phaseKey,
+  escrowAddress,
+  code,
+  confirmShareUrl,
+  fundShareUrl,
+  finalizeShareUrl,
+}: PhaseActionButtonProps) {
+  switch (phaseKey) {
     case 'AwaitingConfirmation':
       return (
-        <Link
-          href={`/tx/confirm?escrow=${escrowAddress}`}
-          className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-yellow-300 bg-yellow-500/10 border border-yellow-500/30 rounded-lg hover:bg-yellow-500/20 transition-colors"
-        >
-          Confirm as Seller
-          <ArrowRight className="w-4 h-4" />
-        </Link>
+        <div className="space-y-2">
+          <Link
+            href={`/tx/confirm?escrow=${escrowAddress}&code=${encodeURIComponent(code)}&role=seller`}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-yellow-300 bg-yellow-500/10 border border-yellow-500/30 rounded-lg hover:bg-yellow-500/20 active:scale-[0.99] transition-all"
+          >
+            Confirm as Seller
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+          <ShareModal
+            shareUrl={confirmShareUrl}
+            title="Share confirm link"
+            description="Send this to the seller so they can confirm the escrow."
+            triggerLabel={SIMPLE_COPY.shareConfirm}
+            triggerClassName="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+          />
+        </div>
       );
 
     case 'Funded':
       return (
-        <Link
-          href={`/tx/finalize?escrow=${escrowAddress}`}
-          className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/20 transition-colors"
-        >
-          Finalize Escrow
-          <ArrowRight className="w-4 h-4" />
-        </Link>
+        <div className="space-y-2">
+          <Link
+            href={`/tx/finalize?escrow=${escrowAddress}&code=${encodeURIComponent(code)}`}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/20 active:scale-[0.99] transition-all"
+          >
+            Finalize Escrow
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+          <ShareModal
+            shareUrl={finalizeShareUrl}
+            title="Share finalize link"
+            description="Anyone can finalize when conditions are met."
+            triggerLabel={SIMPLE_COPY.shareFinalize}
+            triggerClassName="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+          />
+        </div>
       );
 
     case 'ConfirmedAwaitingFunding':
       return (
-        <div className="w-full text-center py-2 text-sm text-blue-300/80">
-          Awaiting buyer to fund escrow
+        <div className="space-y-2">
+          <Link
+            href={`/tx/fund?escrow=${escrowAddress}&code=${encodeURIComponent(code)}&role=buyer`}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-blue-300 bg-blue-500/10 border border-blue-500/30 rounded-lg hover:bg-blue-500/20 active:scale-[0.99] transition-all"
+          >
+            Fund Escrow
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+          <ShareModal
+            shareUrl={fundShareUrl}
+            title="Share funding link"
+            description="Send this to the buyer so they can fund escrow."
+            triggerLabel={SIMPLE_COPY.shareFunding}
+            triggerClassName="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+          />
         </div>
       );
 

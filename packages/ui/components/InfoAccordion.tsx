@@ -38,7 +38,7 @@ export default function InfoAccordion({ items }: InfoAccordionProps) {
         return (
           <div
             key={item.id}
-            className={`bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden ${visibilityClass}`}
+            className={`surface-card overflow-hidden ${visibilityClass}`}
           >
             {/* Header */}
             <button

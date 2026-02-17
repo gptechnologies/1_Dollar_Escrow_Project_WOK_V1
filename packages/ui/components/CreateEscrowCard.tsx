@@ -1,9 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, Copy, ExternalLink, Check, ChevronDown, ClipboardPaste } from 'lucide-react';
 import DeadlineDateTimePicker from './DeadlineDateTimePicker';
+import ShareModal from './ShareModal';
+import { buildShareUrl } from '@/lib/share';
 
 interface CreatedEscrow {
   escrow: string;
@@ -24,7 +26,18 @@ const TOKEN_OPTIONS = [
   { value: 'USDT', label: 'USDT', address: process.env.NEXT_PUBLIC_USDT_ADDRESS || '' },
 ];
 
-export default function CreateEscrowCard() {
+type CreateEscrowCardProps = {
+  initialValues?: {
+    amount?: string;
+    token?: string;
+    funder?: string;
+    payout?: string;
+    deadlineDate?: string;
+    deadlineTime?: string;
+  };
+};
+
+export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProps) {
   const [amount, setAmount] = useState('');
   const [selectedToken, setSelectedToken] = useState('USDC');
   const [fundingAddress, setFundingAddress] = useState('');
@@ -52,6 +65,19 @@ export default function CreateEscrowCard() {
   // Track whether address fields have been blurred (for showing preview)
   const [fundingAddressBlurred, setFundingAddressBlurred] = useState(false);
   const [counterpartyBlurred, setCounterpartyBlurred] = useState(false);
+
+  useEffect(() => {
+    if (!initialValues) return;
+
+    if (initialValues.amount) setAmount(initialValues.amount);
+    if (initialValues.token && TOKEN_OPTIONS.some((token) => token.value === initialValues.token)) {
+      setSelectedToken(initialValues.token);
+    }
+    if (initialValues.funder) setFundingAddress(initialValues.funder);
+    if (initialValues.payout) setCounterparty(initialValues.payout);
+    if (initialValues.deadlineDate) setDeadlineDate(initialValues.deadlineDate);
+    if (initialValues.deadlineTime) setDeadlineTime(initialValues.deadlineTime);
+  }, [initialValues]);
 
   // Paste from clipboard helper
   const pasteFromClipboard = async (
@@ -353,6 +379,15 @@ export default function CreateEscrowCard() {
 
   // Show success state with escrow address
   if (createdEscrow) {
+    const confirmShareUrl = buildShareUrl(createdEscrow.code, {
+      action: 'confirm',
+      role: 'seller',
+    });
+    const fundShareUrl = buildShareUrl(createdEscrow.code, {
+      action: 'fund',
+      role: 'buyer',
+    });
+
     return (
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -360,13 +395,13 @@ export default function CreateEscrowCard() {
         transition={{ duration: 0.5 }}
         className="relative z-30 w-[320px]"
       >
-        <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5">
+        <div className="surface-card p-5">
           <div className="text-center mb-4">
             <div className="w-12 h-12 bg-[#0BB89A]/20 rounded-full flex items-center justify-center mx-auto mb-3">
               <Check className="w-6 h-6 text-[#0BB89A]" />
             </div>
             <h2 className="text-lg font-bold text-white">Escrow Created!</h2>
-            <p className="text-xs text-white/70 mt-1">Share this address with the seller</p>
+            <p className="text-xs text-white/70 mt-1">You are done with setup. Now the seller must confirm.</p>
           </div>
 
           {/* Escrow Address */}
@@ -400,14 +435,38 @@ export default function CreateEscrowCard() {
             <code className="text-sm font-mono text-white">{createdEscrow.code}</code>
           </div>
 
-          {/* Instructions */}
+          {/* Plain-English next steps */}
           <div className="bg-[#0BB89A]/10 rounded-lg p-3 mb-4 border border-[#0BB89A]/30">
-            <h3 className="text-xs font-semibold text-[#0BB89A] mb-2">Next Steps:</h3>
+            <h3 className="text-xs font-semibold text-[#0BB89A] mb-2">What should happen next</h3>
             <ol className="text-xs text-white/80 space-y-1.5">
-              <li><span className="text-[#0BB89A] font-bold">1.</span> Seller sends exactly $1 {selectedToken} to confirm</li>
-              <li><span className="text-[#0BB89A] font-bold">2.</span> Buyer sends {amount} {selectedToken} to fund</li>
-              <li><span className="text-[#0BB89A] font-bold">3.</span> Seller gets paid at deadline</li>
+              <li><span className="text-[#0BB89A] font-bold">1.</span> Share the seller confirm link below.</li>
+              <li><span className="text-[#0BB89A] font-bold">2.</span> Seller confirms escrow participation.</li>
+              <li><span className="text-[#0BB89A] font-bold">3.</span> Buyer funds {amount} {selectedToken}.</li>
+              <li><span className="text-[#0BB89A] font-bold">4.</span> After deadline, escrow can be finalized and funds are released.</li>
             </ol>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 mb-3">
+            <p className="text-[11px] text-white/65">
+              Seller action: this link is for the seller to confirm.
+            </p>
+            <ShareModal
+              shareUrl={confirmShareUrl}
+              title="Share confirm link"
+              description="Send to seller to confirm escrow participation."
+              triggerLabel="Share seller confirm link"
+              triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+            />
+            <p className="text-[11px] text-white/65 mt-1">
+              Buyer action: share this after seller confirms so buyer can fund.
+            </p>
+            <ShareModal
+              shareUrl={fundShareUrl}
+              title="Share funding link"
+              description="Send to buyer to fund this escrow."
+              triggerLabel="Share buyer funding link"
+              triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+            />
           </div>
 
           {/* View on Arbiscan */}
@@ -423,7 +482,7 @@ export default function CreateEscrowCard() {
           {/* Create Another */}
           <button
             onClick={resetForm}
-            className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-[#0BB89A] hover:bg-[#0BB89A]/90 transition-all mt-3"
+            className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-[#0BB89A] hover:bg-[#0BB89A]/90 active:scale-[0.99] transition-all mt-3"
           >
             Create Another Escrow
           </button>
@@ -439,7 +498,7 @@ export default function CreateEscrowCard() {
       transition={{ duration: 0.5 }}
       className="relative z-30 w-[320px]"
     >
-      <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-5">
+      <div className="surface-card p-5">
         <h2 className="text-lg font-bold text-white mb-3">Create Instant Escrow</h2>
         
         {error && (
@@ -466,7 +525,7 @@ export default function CreateEscrowCard() {
                 placeholder="100.00"
                 step="0.01"
                 min="0"
-                className={`w-full px-2.5 py-2.5 md:py-2 border rounded-lg focus:outline-none transition-colors bg-white/20 backdrop-blur-sm text-white text-sm placeholder:text-white/50 ${
+                className={`w-full px-2.5 py-2.5 md:py-2 rounded-lg focus:outline-none transition-colors surface-input text-white text-sm placeholder:text-white/50 ${
                   errors.amount ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                 }`}
                 required
@@ -509,7 +568,7 @@ export default function CreateEscrowCard() {
                   setSelectedToken(e.target.value);
                   if (errors.token) setErrors({ ...errors, token: '' });
                 }}
-                className={`hidden md:block w-full px-2 py-2 border rounded-lg focus:outline-none transition-colors bg-white/20 backdrop-blur-sm text-white text-sm cursor-pointer ${
+                className={`hidden md:block w-full px-2 py-2 rounded-lg focus:outline-none transition-colors surface-input text-white text-sm cursor-pointer ${
                   errors.token ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                 }`}
               >
@@ -543,7 +602,7 @@ export default function CreateEscrowCard() {
                 onBlur={() => setFundingAddressBlurred(true)}
                 onFocus={() => setFundingAddressBlurred(false)}
                 placeholder="0x..."
-                className={`w-full px-2.5 py-2.5 md:py-2 pr-10 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
+                className={`w-full px-2.5 py-2.5 md:py-2 pr-10 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
                   errors.fundingAddress ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                 }`}
                 required
@@ -585,7 +644,7 @@ export default function CreateEscrowCard() {
                 onBlur={() => setCounterpartyBlurred(true)}
                 onFocus={() => setCounterpartyBlurred(false)}
                 placeholder="0x..."
-                className={`w-full px-2.5 py-2.5 md:py-2 pr-10 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
+                className={`w-full px-2.5 py-2.5 md:py-2 pr-10 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
                   errors.counterparty ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                 }`}
                 required
@@ -652,7 +711,7 @@ export default function CreateEscrowCard() {
                       if (errors.arbitrator1) setErrors({ ...errors, arbitrator1: '' });
                     }}
                     placeholder="0x..."
-                    className={`w-full px-2.5 py-2 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
+                    className={`w-full px-2.5 py-2 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
                       errors.arbitrator1 ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                     }`}
                   />
@@ -674,7 +733,7 @@ export default function CreateEscrowCard() {
                       if (errors.arbitrator2) setErrors({ ...errors, arbitrator2: '' });
                     }}
                     placeholder="0x..."
-                    className={`w-full px-2.5 py-2 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
+                    className={`w-full px-2.5 py-2 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
                       errors.arbitrator2 ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                     }`}
                   />
@@ -696,7 +755,7 @@ export default function CreateEscrowCard() {
                       if (errors.arbitrator3) setErrors({ ...errors, arbitrator3: '' });
                     }}
                     placeholder="0x..."
-                    className={`w-full px-2.5 py-2 border rounded-lg focus:outline-none transition-colors font-mono text-xs bg-white/20 backdrop-blur-sm text-white placeholder:text-white/50 ${
+                    className={`w-full px-2.5 py-2 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
                       errors.arbitrator3 ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
                     }`}
                   />
@@ -718,7 +777,7 @@ export default function CreateEscrowCard() {
           <button
             type="submit"
             disabled={!isFormValid || isLoading}
-            className={`w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white transition-all ${
+            className={`w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white active:scale-[0.99] transition-all ${
               isFormValid && !isLoading
                 ? 'bg-[#0BB89A] hover:bg-[#0BB89A]/90 shadow-lg hover:shadow-xl hover:shadow-[#0BB89A]/20 backdrop-blur-sm'
                 : 'bg-gray-400/50 cursor-not-allowed backdrop-blur-sm'

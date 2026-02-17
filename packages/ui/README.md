@@ -1,4 +1,4 @@
-# Temp-Escrow UI
+# Crow UI
 
 A "Temp-Mail" style interface for creating instant, session-based cryptocurrency escrows with a stunning 3D animated background.
 
