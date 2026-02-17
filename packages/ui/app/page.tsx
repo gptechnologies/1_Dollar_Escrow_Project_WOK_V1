@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { Suspense } from 'react';
 import CreateEscrowCard from '@/components/CreateEscrowCard';
 import EscrowDashboard from '@/components/EscrowDashboard';
 import InfoAccordion from '@/components/InfoAccordion';
@@ -20,18 +21,13 @@ type HomePrefill = {
   deadlineTime?: string;
 };
 
-export default function Home() {
-  const searchParams = useSearchParams();
-  const prefillCreate: HomePrefill = {
-    amount: searchParams.get('amount') ?? undefined,
-    token: searchParams.get('token') ?? undefined,
-    funder: searchParams.get('funder') ?? undefined,
-    payout: searchParams.get('payout') ?? undefined,
-    deadlineDate: searchParams.get('deadlineDate') ?? undefined,
-    deadlineTime: searchParams.get('deadlineTime') ?? undefined,
-  };
-  const prefillLookup = searchParams.get('code') ?? searchParams.get('escrow') ?? '';
-
+function HomeContent({
+  prefillCreate,
+  prefillLookup,
+}: {
+  prefillCreate: HomePrefill;
+  prefillLookup: string;
+}) {
   return (
     <main className="min-h-screen relative">
       {/* Global Spline Background (fixed, covers entire page) */}
@@ -234,5 +230,28 @@ export default function Home() {
         </footer>
       </div>
     </main>
+  );
+}
+
+function HomeWithSearchParams() {
+  const searchParams = useSearchParams();
+  const prefillCreate: HomePrefill = {
+    amount: searchParams.get('amount') ?? undefined,
+    token: searchParams.get('token') ?? undefined,
+    funder: searchParams.get('funder') ?? undefined,
+    payout: searchParams.get('payout') ?? undefined,
+    deadlineDate: searchParams.get('deadlineDate') ?? undefined,
+    deadlineTime: searchParams.get('deadlineTime') ?? undefined,
+  };
+  const prefillLookup = searchParams.get('code') ?? searchParams.get('escrow') ?? '';
+
+  return <HomeContent prefillCreate={prefillCreate} prefillLookup={prefillLookup} />;
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<HomeContent prefillCreate={{}} prefillLookup="" />}>
+      <HomeWithSearchParams />
+    </Suspense>
   );
 }
