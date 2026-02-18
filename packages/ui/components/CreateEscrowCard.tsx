@@ -45,6 +45,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
   const [deadlineDate, setDeadlineDate] = useState('');
   const [deadlineTime, setDeadlineTime] = useState('23:59');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAdvancedArbitrationInfo, setShowAdvancedArbitrationInfo] = useState(false);
   const [arbitrator1, setArbitrator1] = useState('');
   const [arbitrator2, setArbitrator2] = useState('');
   const [arbitrator3, setArbitrator3] = useState('');  // Deadlock arbitrator
@@ -358,6 +359,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     setArbitrator2('');
     setArbitrator3('');
     setShowAdvanced(false);
+    setShowAdvancedArbitrationInfo(false);
     setDeadlineDate('');
     setDeadlineTime('23:59');
     setFundingAddressBlurred(false);
@@ -689,7 +691,13 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
           <div>
             <button
               type="button"
-              onClick={() => setShowAdvanced((prev) => !prev)}
+              onClick={() => {
+                setShowAdvanced((prev) => {
+                  const next = !prev;
+                  if (!next) setShowAdvancedArbitrationInfo(false);
+                  return next;
+                });
+              }}
               className="flex w-full items-center justify-between text-xs font-semibold text-white/80 hover:text-white transition-colors py-1"
             >
               Add arbitrators (optional)
@@ -765,10 +773,27 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
                 </div>
 
                 <p className="text-[10px] text-white/70">
-                  Optional: 1 or 3 arbitrators. With 1 arb, their vote resolves immediately.
-                  With 3 arbs, #1 and #2 must agree; if they disagree, #3 breaks the tie.
-                  Unresolved disputes after the arb window are swept to treasury.
+                  1 arbitrator: they can release funds to either side if there&apos;s a dispute.
+                  <br />
+                  <br />
+                  3 arbitrators: 2 of 3 must agree. The 3rd acts as a tiebreaker when needed.
                 </p>
+
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedArbitrationInfo((prev) => !prev)}
+                    className="flex w-full items-center justify-between text-[10px] font-semibold text-white/70 hover:text-white transition-colors py-0.5"
+                  >
+                    Advanced
+                    <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAdvancedArbitrationInfo ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showAdvancedArbitrationInfo && (
+                    <p className="mt-1 text-[10px] text-white/70">
+                      If no decision is made before the arbitration window ends, funds move to the contract&apos;s recovery address for manual resolution.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -799,7 +824,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
           <p className="text-[10px] text-white/60 md:text-white/80 leading-relaxed">
             <strong className="text-white/80 md:text-white">Fees:</strong> 1% fee, capped at $1.
             <br />
-            <strong className="text-white/80 md:text-white">Caution:</strong> Verify on Arbiscan.
+            <strong className="text-white/80 md:text-white">Tip:</strong> You can verify all transactions on arbiscan
           </p>
         </div>
       </div>

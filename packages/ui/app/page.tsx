@@ -78,25 +78,22 @@ function HomeContent({
                   
                   {/* Top Info Box - right-aligned on desktop */}
                   <div className="surface-card p-5 w-[320px] ml-auto">
-                    <h3 className="text-lg font-semibold text-white mb-2">How It Works</h3>
+                    <h3 className="text-lg font-semibold text-white mb-2">How it works</h3>
                     <ul className="space-y-2 text-sm text-white/70">
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">1.</span>
-                        <span>FIRST, create an escrow. The buyer address is the wallet that will be funding the escrow. The seller address is the wallet that will be paid if successful. This will be given an escrow address and lookup code.</span>
+                        <span><strong className="text-white">Create escrow</strong><br />Enter buyer + seller wallets and set a deadline. We generate an escrow address + code.</span>
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">2.</span>
-                        <span>NEXT, the seller confirms the escrow by sending $1 to the escrow address or with the Confirm button in the escrow dashboard.</span>
+                        <span><strong className="text-white">Confirm (seller)</strong><br />Seller confirms the deal (one click or a $1 confirmation).</span>
                       </li>
                       <li className="flex items-start gap-2">
                         <span className="text-[#0BB89A] font-bold">3.</span>
-                        <span>LAST, after the escrow is confirmed, fund the escrow before the deadline. Funds are released automatically to the seller on the deadline.</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="text-[#0BB89A] font-bold">4.</span>
-                        <span>If arbitrators are filled out, they are the only option for resolution or funds will need to be requested from the treasury.</span>
+                        <span><strong className="text-white">Fund (buyer)</strong><br />Buyer deposits funds before the deadline. On the deadline, funds release automatically.</span>
                       </li>
                     </ul>
+                    <p className="mt-3 text-sm text-white/70">Optional: Add an arbitrator for disputes.</p>
                   </div>
 
                 </div>
@@ -119,28 +116,25 @@ function HomeContent({
               items={[
                 {
                   id: 'how-it-works',
-                  title: 'How It Works',
+                  title: 'How it works',
                   mobileOnly: true,
                   content: (
                     <>
                       <ul className="space-y-3 text-sm text-white/70">
                         <li className="flex items-start gap-2">
                           <span className="text-[#0BB89A] font-bold">1.</span>
-                          <span>Create an escrow with buyer &amp; seller addresses, amount, and deadline. You&apos;ll get a unique escrow address and lookup code.</span>
+                          <span><strong className="text-white">Create escrow</strong><br />Enter buyer + seller wallets and set a deadline. We generate an escrow address + code.</span>
                         </li>
                         <li className="flex items-start gap-2">
                           <span className="text-[#0BB89A] font-bold">2.</span>
-                          <span>Seller confirms by sending $1 to the escrow address or using the Confirm button.</span>
+                          <span><strong className="text-white">Confirm (seller)</strong><br />Seller confirms the deal (one click or a $1 confirmation).</span>
                         </li>
                         <li className="flex items-start gap-2">
                           <span className="text-[#0BB89A] font-bold">3.</span>
-                          <span>Buyer funds the escrow. Funds release automatically to seller at deadline.</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="text-[#0BB89A] font-bold">4.</span>
-                          <span>Optional arbitrators can resolve disputes if assigned.</span>
+                          <span><strong className="text-white">Fund (buyer)</strong><br />Buyer deposits funds before the deadline. On the deadline, funds release automatically.</span>
                         </li>
                       </ul>
+                      <p className="mt-3 text-sm text-white/70">Optional: Add an arbitrator for disputes.</p>
                     </>
                   ),
                 },
