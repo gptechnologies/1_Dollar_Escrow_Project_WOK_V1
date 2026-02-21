@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { getArbiscanAddressUrl } from '@/lib/chain';
-import { buildShareUrl } from '@/lib/share';
+import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
 import { SIMPLE_COPY } from '@/lib/copy';
 import { getStageGuidance, normalizePhaseName, StagePill, StageProgress, type PhaseKey } from './escrowStage';
 import ShareModal from './ShareModal';
@@ -382,8 +382,11 @@ export default function EscrowCard({
   const matcher = useWalletMatcher(matchAddresses);
   const inputLower = matcher.input.trim().toLowerCase();
   const confirmShareUrl = buildShareUrl(code, { action: 'confirm', role: 'seller' });
+  const confirmWalletUrls = buildWalletShareUrls(code, { action: 'confirm', role: 'seller' });
   const fundShareUrl = buildShareUrl(code, { action: 'fund', role: 'buyer' });
+  const fundWalletUrls = buildWalletShareUrls(code, { action: 'fund', role: 'buyer' });
   const finalizeShareUrl = buildShareUrl(code, { action: 'finalize' });
+  const finalizeWalletUrls = buildWalletShareUrls(code, { action: 'finalize' });
   const stageGuidance = getStageGuidance(phaseKey, {
     buyerAddress: funder,
     sellerAddress: payout,
@@ -517,8 +520,11 @@ export default function EscrowCard({
           escrowAddress={escrow}
           code={code}
           confirmShareUrl={confirmShareUrl}
+          confirmWalletUrls={confirmWalletUrls}
           fundShareUrl={fundShareUrl}
+          fundWalletUrls={fundWalletUrls}
           finalizeShareUrl={finalizeShareUrl}
+          finalizeWalletUrls={finalizeWalletUrls}
         />
       </div>
     </div>
@@ -566,8 +572,11 @@ type PhaseActionButtonProps = {
   escrowAddress: string;
   code: string;
   confirmShareUrl: string;
+  confirmWalletUrls: Record<string, string>;
   fundShareUrl: string;
+  fundWalletUrls: Record<string, string>;
   finalizeShareUrl: string;
+  finalizeWalletUrls: Record<string, string>;
 };
 
 function PhaseActionButton({
@@ -575,8 +584,11 @@ function PhaseActionButton({
   escrowAddress,
   code,
   confirmShareUrl,
+  confirmWalletUrls,
   fundShareUrl,
+  fundWalletUrls,
   finalizeShareUrl,
+  finalizeWalletUrls,
 }: PhaseActionButtonProps) {
   switch (phaseKey) {
     case 'AwaitingConfirmation':
@@ -591,6 +603,7 @@ function PhaseActionButton({
           </Link>
           <ShareModal
             shareUrl={confirmShareUrl}
+            walletUrls={confirmWalletUrls}
             title="Share confirm link"
             description="Send this to the seller so they can confirm the escrow."
             triggerLabel={SIMPLE_COPY.shareConfirm}
@@ -611,6 +624,7 @@ function PhaseActionButton({
           </Link>
           <ShareModal
             shareUrl={finalizeShareUrl}
+            walletUrls={finalizeWalletUrls}
             title="Share finalize link"
             description="Anyone can finalize when conditions are met."
             triggerLabel={SIMPLE_COPY.shareFinalize}
@@ -631,6 +645,7 @@ function PhaseActionButton({
           </Link>
           <ShareModal
             shareUrl={fundShareUrl}
+            walletUrls={fundWalletUrls}
             title="Share funding link"
             description="Send this to the buyer so they can fund escrow."
             triggerLabel={SIMPLE_COPY.shareFunding}

@@ -1,11 +1,12 @@
 /**
  * TX Page Shell - Shared layout wrapper for transaction pages
- * Provides consistent header, background, and footer across /tx/* routes
+ * Uses a lightweight branded background (no Spline) for fast loading,
+ * especially important in mobile wallet browsers (MetaMask, Coinbase).
  */
 
 'use client';
 
-import dynamic from 'next/dynamic';
+import Image from 'next/image';
 import Link from 'next/link';
 import { ReactNode } from 'react';
 
@@ -14,25 +15,27 @@ type TxPageShellProps = {
   title?: string;
 };
 
-const SplineHero = dynamic(() => import('@/components/SplineHero'), {
-  ssr: false,
-  loading: () => (
-    <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat" />
-  ),
-});
-
 export default function TxPageShell({ children, title }: TxPageShellProps) {
   return (
     <main className="min-h-screen relative overflow-hidden">
-      <SplineHero />
-      <div className="fixed inset-0 -z-10 bg-black/35" />
+      {/* Lightweight branded background */}
+      <div className="fixed inset-0 -z-20 bg-[#0d0618]" />
+      <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat opacity-40" />
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-black/30 via-transparent to-black/50" />
 
       {/* Content */}
       <div className="relative z-10 min-h-screen flex flex-col">
         {/* Header */}
         <header className="w-full px-4 py-6">
           <div className="max-w-4xl mx-auto">
-            <Link href="/" className="inline-flex items-center gap-2 group">
+            <Link href="/" className="inline-flex items-center gap-3 group">
+              <Image
+                src="/Crow Logo Isoloated White.png"
+                alt="Crow"
+                width={32}
+                height={32}
+                className="opacity-90 group-hover:opacity-100 transition-opacity"
+              />
               <div className="relative">
                 <span className="text-2xl font-bold text-white">Crow</span>
                 <span className="absolute left-0 top-full text-xs text-white/60 whitespace-nowrap">

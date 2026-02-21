@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { Loader2, Copy, ExternalLink, Check, ChevronDown, ClipboardPaste } from 'lucide-react';
 import DeadlineDateTimePicker from './DeadlineDateTimePicker';
 import ShareModal from './ShareModal';
-import { buildShareUrl } from '@/lib/share';
+import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
 
 interface CreatedEscrow {
   escrow: string;
@@ -385,7 +385,15 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
       action: 'confirm',
       role: 'seller',
     });
+    const confirmWalletUrls = buildWalletShareUrls(createdEscrow.code, {
+      action: 'confirm',
+      role: 'seller',
+    });
     const fundShareUrl = buildShareUrl(createdEscrow.code, {
+      action: 'fund',
+      role: 'buyer',
+    });
+    const fundWalletUrls = buildWalletShareUrls(createdEscrow.code, {
       action: 'fund',
       role: 'buyer',
     });
@@ -454,6 +462,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             </p>
             <ShareModal
               shareUrl={confirmShareUrl}
+              walletUrls={confirmWalletUrls}
               title="Share confirm link"
               description="Send to seller to confirm escrow participation."
               triggerLabel="Share seller confirm link"
@@ -464,6 +473,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             </p>
             <ShareModal
               shareUrl={fundShareUrl}
+              walletUrls={fundWalletUrls}
               title="Share funding link"
               description="Send to buyer to fund this escrow."
               triggerLabel="Share buyer funding link"

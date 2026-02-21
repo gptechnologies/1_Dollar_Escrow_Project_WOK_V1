@@ -15,7 +15,7 @@ import EscrowReviewCard, { checkEligibility, type ActionType } from '@/component
 import TxActionArea from '@/components/tx/TxActionArea';
 import { readEscrowState, isValidAddress, type EscrowState } from '@/lib/chain';
 import { encodeConfirmTx } from '@/lib/wallet';
-import { buildShareUrl } from '@/lib/share';
+import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 function ConfirmPageContent() {
@@ -110,6 +110,9 @@ function ConfirmPageContent() {
   const confirmShareUrl = codeParam
     ? buildShareUrl(codeParam, { action: 'confirm', role: 'seller' })
     : null;
+  const confirmWalletUrls = codeParam
+    ? buildWalletShareUrls(codeParam, { action: 'confirm', role: 'seller' })
+    : null;
 
   return (
     <TxPageShell title="Confirm Escrow">
@@ -120,6 +123,7 @@ function ConfirmPageContent() {
             {confirmShareUrl && (
               <ShareModal
                 shareUrl={confirmShareUrl}
+                walletUrls={confirmWalletUrls ?? undefined}
                 title="Share confirm link"
                 description="Send this to the seller so they can confirm escrow."
                 triggerLabel="Share"

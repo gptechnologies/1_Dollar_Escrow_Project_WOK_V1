@@ -3,17 +3,27 @@
 import { useMemo, useState } from 'react';
 import QRCode from 'react-qr-code';
 import { Check, Copy, QrCode, Share2, X } from 'lucide-react';
+import type { WalletTarget } from '@/lib/share';
 
 type ShareModalProps = {
   shareUrl: string;
+  /** Pre-built wallet-specific URLs keyed by target. Falls back to shareUrl for missing keys. */
+  walletUrls?: Partial<Record<WalletTarget, string>>;
   title: string;
   description?: string;
   triggerLabel?: string;
   triggerClassName?: string;
 };
 
+const WALLET_TABS: { key: WalletTarget; label: string; accent: string }[] = [
+  { key: 'web', label: 'Web', accent: 'bg-white/15' },
+  { key: 'metamask', label: 'MetaMask', accent: 'bg-[#F6851B]/20' },
+  { key: 'coinbase', label: 'Coinbase', accent: 'bg-[#0052FF]/20' },
+];
+
 export default function ShareModal({
   shareUrl,
+  walletUrls,
   title,
   description,
   triggerLabel = 'Share',
@@ -21,14 +31,18 @@ export default function ShareModal({
 }: ShareModalProps) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [selectedWallet, setSelectedWallet] = useState<WalletTarget>('metamask');
+
   const canNativeShare = useMemo(
     () => typeof navigator !== 'undefined' && typeof navigator.share === 'function',
     [],
   );
 
+  const activeUrl = walletUrls?.[selectedWallet] ?? shareUrl;
+
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(activeUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -39,7 +53,7 @@ export default function ShareModal({
   const handleNativeShare = async () => {
     if (!canNativeShare) return;
     try {
-      await navigator.share({ title, text: description, url: shareUrl });
+      await navigator.share({ title, text: description, url: activeUrl });
     } catch {
       // user cancelled
     }
@@ -78,13 +92,39 @@ export default function ShareModal({
               </button>
             </div>
 
+            {/* Wallet selector tabs */}
+            {walletUrls && (
+              <div className="flex gap-1.5 mb-4">
+                {WALLET_TABS.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => { setCopied(false); setSelectedWallet(tab.key); }}
+                    className={`flex-1 text-xs font-semibold py-1.5 rounded-lg transition-colors ${
+                      selectedWallet === tab.key
+                        ? `${tab.accent} text-white ring-1 ring-white/20`
+                        : 'text-white/50 hover:text-white/70 hover:bg-white/5'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="bg-white rounded-xl p-3 flex items-center justify-center mb-4">
-              <QRCode value={shareUrl} size={180} />
+              <QRCode value={activeUrl} size={180} />
             </div>
+
+            {walletUrls && selectedWallet !== 'web' && (
+              <p className="text-[10px] text-white/50 text-center mb-2">
+                Scan with {selectedWallet === 'metamask' ? 'MetaMask' : 'Coinbase Wallet'} QR scanner to open directly in-app
+              </p>
+            )}
 
             <div className="rounded-lg bg-black/30 p-2.5 mb-3">
               <p className="text-[11px] text-white/40 mb-1">Share link</p>
-              <p className="text-xs font-mono text-white/75 break-all">{shareUrl}</p>
+              <p className="text-xs font-mono text-white/75 break-all">{activeUrl}</p>
             </div>
 
             <div className="grid grid-cols-2 gap-2">

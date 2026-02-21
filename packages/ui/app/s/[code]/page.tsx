@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowRight, ShieldCheck } from 'lucide-react';
-import { buildTxHref, type ShareAction, type ShareRole } from '@/lib/share';
+import { buildTxHref, resolveAppBaseUrl, type ShareAction, type ShareRole, type WalletTarget } from '@/lib/share';
 import { formatTokenAmount, formatTimestamp, shortenAddress } from '@/lib/chain';
 
 type EscrowSummary = {
@@ -17,7 +18,7 @@ type EscrowSummary = {
 
 type SharePageProps = {
   params: Promise<{ code: string }>;
-  searchParams: Promise<{ action?: string; role?: string }>;
+  searchParams: Promise<{ action?: string; role?: string; wallet?: string }>;
 };
 
 function normalizeAction(action?: string): ShareAction {
@@ -34,6 +35,20 @@ function normalizeRole(action: ShareAction, role?: string): ShareRole | undefine
   if (action === 'confirm') return 'seller';
   if (action === 'fund') return 'buyer';
   return undefined;
+}
+
+function normalizeWallet(wallet?: string): WalletTarget | undefined {
+  if (wallet === 'metamask' || wallet === 'coinbase') return wallet;
+  return undefined;
+}
+
+function buildMetaMaskDeepLink(url: string): string {
+  const cleanUrl = url.replace(/^https?:\/\//, '');
+  return `https://metamask.app.link/dapp/${cleanUrl}`;
+}
+
+function buildCoinbaseWalletDeepLink(url: string): string {
+  return `https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(url)}`;
 }
 
 function getActionCopy(action: ShareAction) {
@@ -110,13 +125,30 @@ export async function generateMetadata({ params, searchParams }: SharePageProps)
 
 export default async function ShareLandingPage({ params, searchParams }: SharePageProps) {
   const { code } = await params;
-  const { action: actionParam, role: roleParam } = await searchParams;
+  const { action: actionParam, role: roleParam, wallet: walletParam } = await searchParams;
   const action = normalizeAction(actionParam);
   const role = normalizeRole(action, roleParam);
+  const walletTarget = normalizeWallet(walletParam);
   const copy = getActionCopy(action);
   const summary = await fetchEscrowSummaryByCode(code);
 
-  const href = summary ? buildTxHref(action, summary.escrow, summary.code, role) : '/';
+  const txPath = summary ? buildTxHref(action, summary.escrow, summary.code, role) : null;
+
+  // Wallet-specific auto-redirect: build absolute tx URL then wrap in wallet deep link
+  if (walletTarget && txPath) {
+    const baseUrl = resolveAppBaseUrl();
+    const fullTxUrl = `${baseUrl}${txPath}`;
+
+    if (walletTarget === 'metamask') {
+      redirect(buildMetaMaskDeepLink(fullTxUrl));
+    }
+    if (walletTarget === 'coinbase') {
+      redirect(buildCoinbaseWalletDeepLink(fullTxUrl));
+    }
+  }
+
+  // Default web flow — show summary with CTA link
+  const href = txPath ?? '/';
 
   return (
     <main className="min-h-screen bg-[#0d0618] text-white px-4 py-16">

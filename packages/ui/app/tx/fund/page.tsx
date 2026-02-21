@@ -13,7 +13,7 @@ import { AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 import TxPageShell from '@/components/tx/TxPageShell';
 import TxActionArea from '@/components/tx/TxActionArea';
 import ShareModal from '@/components/ShareModal';
-import { buildShareUrl } from '@/lib/share';
+import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
 import {
   readEscrowState,
   isValidAddress,
@@ -96,6 +96,7 @@ function FundPageContent() {
   const amountToFund = escrow.targetAmount;
   const txData = encodeFundEscrowTx(escrow.escrow, amountToFund);
   const fundShareUrl = codeParam ? buildShareUrl(codeParam, { action: 'fund', role: 'buyer' }) : null;
+  const fundWalletUrls = codeParam ? buildWalletShareUrls(codeParam, { action: 'fund', role: 'buyer' }) : null;
 
   const eligibility: EligibilityResult = (() => {
     const reasons: string[] = [];
@@ -144,6 +145,7 @@ function FundPageContent() {
             {fundShareUrl && (
               <ShareModal
                 shareUrl={fundShareUrl}
+                walletUrls={fundWalletUrls ?? undefined}
                 title="Share funding link"
                 description="Send this to the buyer so they can fund escrow."
                 triggerLabel="Share"

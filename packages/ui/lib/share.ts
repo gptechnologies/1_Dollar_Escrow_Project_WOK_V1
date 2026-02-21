@@ -1,9 +1,11 @@
 export type ShareAction = 'confirm' | 'fund' | 'finalize';
 export type ShareRole = 'buyer' | 'seller';
+export type WalletTarget = 'web' | 'metamask' | 'coinbase';
 
 type ShareParams = {
   action: ShareAction;
   role?: ShareRole;
+  wallet?: WalletTarget;
 };
 
 export function buildSharePath(code: string, params: ShareParams): string {
@@ -11,6 +13,9 @@ export function buildSharePath(code: string, params: ShareParams): string {
   query.set('action', params.action);
   if (params.role) {
     query.set('role', params.role);
+  }
+  if (params.wallet && params.wallet !== 'web') {
+    query.set('wallet', params.wallet);
   }
   return `/s/${encodeURIComponent(code)}?${query.toString()}`;
 }
@@ -27,6 +32,21 @@ export function resolveAppBaseUrl(): string {
 
 export function buildShareUrl(code: string, params: ShareParams): string {
   return `${resolveAppBaseUrl()}${buildSharePath(code, params)}`;
+}
+
+/**
+ * Build wallet-keyed URL map for ShareModal.
+ * Returns { web, metamask, coinbase } URLs for a given share code + params.
+ */
+export function buildWalletShareUrls(
+  code: string,
+  params: Omit<ShareParams, 'wallet'>,
+): Record<WalletTarget, string> {
+  return {
+    web: buildShareUrl(code, { ...params }),
+    metamask: buildShareUrl(code, { ...params, wallet: 'metamask' }),
+    coinbase: buildShareUrl(code, { ...params, wallet: 'coinbase' }),
+  };
 }
 
 export function buildTxHref(

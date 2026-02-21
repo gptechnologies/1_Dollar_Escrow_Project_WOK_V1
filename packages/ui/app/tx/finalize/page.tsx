@@ -15,7 +15,7 @@ import EscrowReviewCard, { checkEligibility, type ActionType } from '@/component
 import TxActionArea from '@/components/tx/TxActionArea';
 import { readEscrowState, isValidAddress, formatTokenAmount, type EscrowState } from '@/lib/chain';
 import { encodeFinalizeTx } from '@/lib/wallet';
-import { buildShareUrl } from '@/lib/share';
+import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
 import { AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 
 function FinalizePageContent() {
@@ -108,6 +108,7 @@ function FinalizePageContent() {
   const eligibility = checkEligibility(escrow, action, connectedAddress);
   const txData = encodeFinalizeTx();
   const finalizeShareUrl = codeParam ? buildShareUrl(codeParam, { action: 'finalize' }) : null;
+  const finalizeWalletUrls = codeParam ? buildWalletShareUrls(codeParam, { action: 'finalize' }) : null;
 
   // Calculate payout amounts (fee is 1% capped at $1)
   const targetAmount = escrow.targetAmount;
@@ -129,6 +130,7 @@ function FinalizePageContent() {
             {finalizeShareUrl && (
               <ShareModal
                 shareUrl={finalizeShareUrl}
+                walletUrls={finalizeWalletUrls ?? undefined}
                 title="Share finalize link"
                 description="Anyone can call finalize when escrow is payable."
                 triggerLabel="Share"
