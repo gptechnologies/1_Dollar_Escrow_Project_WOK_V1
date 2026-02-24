@@ -6,6 +6,7 @@ import CreateEscrowCard from '@/components/CreateEscrowCard';
 import EscrowDashboard from '@/components/EscrowDashboard';
 import AcceptPaymentCard from '@/components/AcceptPaymentCard';
 import InfoAccordion from '@/components/InfoAccordion';
+import { ChevronDown } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 
 const SplineHero = dynamic(() => import('@/components/SplineHero'), {
@@ -74,34 +75,18 @@ function HomeContent({
                   <CreateEscrowCard initialValues={prefillCreate} />
                 </div>
 
-                {/* RIGHT: How It Works + Accept Payment - hidden on mobile, shown on desktop */}
-                <div className="hidden lg:flex flex-1 max-w-2xl flex-col gap-6">
-                  
-                  {/* Top Info Box - right-aligned on desktop */}
-                  <div className="surface-card p-5 w-[320px] ml-auto">
-                    <h3 className="text-lg font-semibold text-white mb-2">How it works</h3>
-                    <ul className="space-y-2 text-sm text-white/70">
-                      <li className="flex items-start gap-2">
-                        <span className="text-[#0BB89A] font-bold">1.</span>
-                        <span><strong className="text-white">Create escrow</strong><br />Enter buyer + seller wallets and set a deadline. We generate an escrow address + code.</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="text-[#0BB89A] font-bold">2.</span>
-                        <span><strong className="text-white">Confirm (seller)</strong><br />Seller confirms the deal (one click or a $1 confirmation).</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="text-[#0BB89A] font-bold">3.</span>
-                        <span><strong className="text-white">Fund (buyer)</strong><br />Buyer deposits funds before the deadline. On the deadline, funds release automatically.</span>
-                      </li>
-                    </ul>
-                    <p className="mt-3 text-sm text-white/70">Optional: Add an arbitrator for disputes.</p>
-                  </div>
-
-                  {/* Accept Payment Card - right-aligned below How it works */}
-                  <div className="ml-auto">
+                {/* RIGHT: Accept Payment card - hidden on mobile, shown on desktop */}
+                <div className="hidden lg:flex flex-1 max-w-2xl flex-col">
+                  <div className="ml-auto flex flex-col items-center gap-3">
                     <AcceptPaymentCard />
+                    <a
+                      href="#how-it-works"
+                      className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-colors"
+                    >
+                      How it works
+                      <ChevronDown className="w-4 h-4 animate-bounce" />
+                    </a>
                   </div>
-
                 </div>
               </div>
             </div>
@@ -116,22 +101,29 @@ function HomeContent({
         </section>
 
         {/* ==================== SECTION 2.5: Accept Payment (mobile only) ==================== */}
-        <section className="lg:hidden px-4 pb-8 md:pb-12 flex justify-center">
+        <section className="lg:hidden px-4 pb-8 md:pb-12 flex flex-col items-center gap-3">
           <AcceptPaymentCard />
+          <a
+            href="#how-it-works"
+            className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-colors"
+          >
+            How it works
+            <ChevronDown className="w-4 h-4 animate-bounce" />
+          </a>
         </section>
 
         {/* ==================== SECTION 3: Information Accordion ==================== */}
-        <section className="py-8 md:py-16 px-4">
+        <section id="how-it-works" className="py-8 md:py-16 px-4 scroll-mt-8">
           <div className="max-w-7xl mx-auto">
             <InfoAccordion
               items={[
                 {
                   id: 'how-it-works',
                   title: 'How it works',
-                  mobileOnly: true,
                   content: (
                     <>
-                      <ul className="space-y-3 text-sm text-white/70">
+                      <h4 className="text-white font-semibold mb-2">Escrow</h4>
+                      <ul className="space-y-3 text-sm text-white/70 mb-5">
                         <li className="flex items-start gap-2">
                           <span className="text-[#0BB89A] font-bold">1.</span>
                           <span><strong className="text-white">Create escrow</strong><br />Enter buyer + seller wallets and set a deadline. We generate an escrow address + code.</span>
@@ -145,7 +137,23 @@ function HomeContent({
                           <span><strong className="text-white">Fund (buyer)</strong><br />Buyer deposits funds before the deadline. On the deadline, funds release automatically.</span>
                         </li>
                       </ul>
-                      <p className="mt-3 text-sm text-white/70">Optional: Add an arbitrator for disputes.</p>
+                      <p className="text-sm text-white/70 mb-5">Optional: Add an arbitrator for disputes.</p>
+
+                      <h4 className="text-white font-semibold mb-2">Accept Stablecoins</h4>
+                      <ul className="space-y-3 text-sm text-white/70">
+                        <li className="flex items-start gap-2">
+                          <span className="text-[#0BB89A] font-bold">1.</span>
+                          <span><strong className="text-white">Create a payment link</strong><br />Enter your wallet address, a price, and an optional description. We generate a QR code and a shareable link.</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <span className="text-[#0BB89A] font-bold">2.</span>
+                          <span><strong className="text-white">Share the QR code</strong><br />Use it as a price tag, embed it on your site, or send the link directly. It works like a digital invoice.</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <span className="text-[#0BB89A] font-bold">3.</span>
+                          <span><strong className="text-white">Get paid instantly</strong><br />When someone scans the QR with their wallet, the transfer is prefilled with the exact amount. Funds go directly to your wallet -- no middleman, no delays.</span>
+                        </li>
+                      </ul>
                     </>
                   ),
                 },
