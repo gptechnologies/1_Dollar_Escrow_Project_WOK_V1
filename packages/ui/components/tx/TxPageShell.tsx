@@ -19,9 +19,7 @@ export default function TxPageShell({ children, title }: TxPageShellProps) {
   return (
     <main className="min-h-screen relative overflow-hidden">
       {/* Lightweight branded background */}
-      <div className="fixed inset-0 -z-20 bg-[#0d0618]" />
-      <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat opacity-40" />
-      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-black/30 via-transparent to-black/50" />
+      <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat" />
 
       {/* Content */}
       <div className="relative z-10 min-h-screen flex flex-col">
@@ -30,7 +28,7 @@ export default function TxPageShell({ children, title }: TxPageShellProps) {
           <div className="max-w-4xl mx-auto">
             <Link href="/" className="inline-flex items-center gap-3 group">
               <Image
-                src="/Crow Logo Isoloated White.png"
+                src="/Crow Logo Isolated Black.png"
                 alt="Crow"
                 width={32}
                 height={32}

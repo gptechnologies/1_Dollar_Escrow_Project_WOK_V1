@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense } from 'react';
+import Image from 'next/image';
 import CreateEscrowCard from '@/components/CreateEscrowCard';
 import EscrowDashboard from '@/components/EscrowDashboard';
 import AcceptPaymentCard from '@/components/AcceptPaymentCard';
@@ -27,9 +28,7 @@ function HomeContent({
   return (
     <main className="min-h-screen relative">
       {/* Clouds background (matches TxPageShell) */}
-      <div className="fixed inset-0 -z-20 bg-[#0d0618]" />
-      <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat opacity-40" />
-      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-black/30 via-transparent to-black/50" />
+      <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat" />
 
       {/* All foreground content */}
       <div className="relative z-10">
@@ -42,7 +41,10 @@ function HomeContent({
               {/* Mobile Hero (< md) */}
               <div className="md:hidden flex flex-col items-center text-center gap-2 pb-4">
                 <p className="text-xs text-white/60">No sign up required</p>
-                <h1 className="text-3xl font-bold text-white">Crow</h1>
+                <div className="flex items-center gap-2">
+                  <Image src="/Crow Logo Isolated Black.png" alt="Crow" width={28} height={28} />
+                  <h1 className="text-3xl font-bold text-white">Crow</h1>
+                </div>
                 <p className="text-sm text-white/70">
                   Instant escrow for <span className="text-[#0BB89A]">USDC/USDT</span> on Arbitrum
                 </p>
@@ -50,9 +52,12 @@ function HomeContent({
 
               {/* Desktop Hero (>= md) */}
               <div className="hidden md:flex justify-between items-center">
-                <div className="relative">
-                  <span className="text-2xl font-bold text-white">Crow</span>
-                  <span className="absolute left-0 top-full text-xs text-white/60 whitespace-nowrap">The simplest P2P escrow service</span>
+                <div className="relative flex items-center gap-2.5">
+                  <Image src="/Crow Logo Isolated Black.png" alt="Crow" width={30} height={30} />
+                  <div className="relative">
+                    <span className="text-2xl font-bold text-white">Crow</span>
+                    <span className="absolute left-0 top-full text-xs text-white/60 whitespace-nowrap">The simplest P2P escrow service</span>
+                  </div>
                 </div>
                 <p className="text-sm md:text-base font-medium text-white/80 text-center flex-1">
                   No sign up required. <span className="text-[#0BB89A]">*Supports USDC or USDT on the ARBITRUM network*</span>
