@@ -45,7 +45,7 @@ export default function InfoAccordion({ items }: InfoAccordionProps) {
               type="button"
               onClick={() => toggleItem(item.id)}
               onKeyDown={(e) => handleKeyDown(e, item.id)}
-              className="w-full flex items-center justify-between p-5 text-left hover:bg-white/5 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#0BB89A]/50 focus:ring-offset-2 focus:ring-offset-[#222222]"
+              className="w-full flex items-center justify-between p-5 text-left hover:bg-white/5 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0BB89A]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#222222]"
               aria-expanded={isOpen}
               aria-controls={`content-${item.id}`}
             >
