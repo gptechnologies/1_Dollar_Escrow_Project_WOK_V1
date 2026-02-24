@@ -820,6 +820,70 @@ export const ERC20ABI = [
   }
 ] as const;
 
+// PaymentRouter ABI
+export const PaymentRouterABI = [
+  {
+    "inputs": [
+      { "name": "id", "type": "bytes32" },
+      { "name": "token", "type": "address" },
+      { "name": "recipient", "type": "address" },
+      { "name": "amount", "type": "uint256" }
+    ],
+    "name": "createLink",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "name": "id", "type": "bytes32" }],
+    "name": "pay",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "name": "id", "type": "bytes32" }],
+    "name": "linkExists",
+    "outputs": [{ "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "name": "", "type": "bytes32" }],
+    "name": "links",
+    "outputs": [
+      { "name": "token", "type": "address" },
+      { "name": "recipient", "type": "address" },
+      { "name": "amount", "type": "uint256" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "id", "type": "bytes32" },
+      { "indexed": true, "name": "token", "type": "address" },
+      { "indexed": true, "name": "recipient", "type": "address" },
+      { "indexed": false, "name": "amount", "type": "uint256" }
+    ],
+    "name": "LinkCreated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "id", "type": "bytes32" },
+      { "indexed": true, "name": "payer", "type": "address" },
+      { "indexed": true, "name": "recipient", "type": "address" },
+      { "indexed": false, "name": "token", "type": "address" },
+      { "indexed": false, "name": "amount", "type": "uint256" }
+    ],
+    "name": "PaymentCompleted",
+    "type": "event"
+  }
+] as const;
+
 // Legacy V2 ABIs (for backward compatibility with existing escrows)
 export const EscrowV2ABI = EscrowABI;
 export const EscrowFactoryV2ABI = EscrowFactoryABI;

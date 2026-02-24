@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Loader2, Copy, Check, ClipboardPaste, QrCode, ArrowLeft } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { USDC_ADDRESS, USDT_ADDRESS } from '@/lib/chain';
-import { buildEIP681Uri, buildPaymentUrl } from '@/lib/payment';
+import { buildPaymentUrl } from '@/lib/payment';
 
 const TOKEN_OPTIONS = [
   { value: 'USDC', label: 'USDC', address: process.env.NEXT_PUBLIC_USDC_ADDRESS || USDC_ADDRESS },
@@ -120,7 +120,6 @@ export default function AcceptPaymentCard() {
   };
 
   if (createdLink) {
-    const eip681 = buildEIP681Uri(createdLink.token, createdLink.wallet, createdLink.amount);
     const paymentUrl = buildPaymentUrl(createdLink.code);
     const displayAmount = (Number(createdLink.amount) / 1e6).toFixed(2);
 
@@ -149,7 +148,7 @@ export default function AcceptPaymentCard() {
         </div>
 
         <div className="bg-white rounded-xl p-3 mx-auto w-fit mb-4">
-          <QRCode value={eip681} size={180} level="M" />
+          <QRCode value={paymentUrl} size={180} level="M" />
         </div>
 
         <div className="space-y-2">
@@ -273,6 +272,12 @@ export default function AcceptPaymentCard() {
           )}
         </button>
       </form>
+
+      <div className="mt-3 px-1 space-y-1">
+        <p className="text-[11px] text-white/40 leading-relaxed">
+          <span className="text-white/60 font-medium">Tip:</span> Use it as a price tag, embed it on your site, or send the link directly. It works like a digital invoice.
+        </p>
+      </div>
     </div>
   );
 }

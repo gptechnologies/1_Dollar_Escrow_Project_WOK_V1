@@ -1,13 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import QRCode from 'react-qr-code';
-import { Copy, Check, Wallet, Loader2, ExternalLink } from 'lucide-react';
-import { shortenAddress, ARBITRUM_CHAIN_ID, getArbiscanAddressUrl } from '@/lib/chain';
-import { buildEIP681Uri } from '@/lib/payment';
+import { Copy, Check, Wallet, Loader2, ExternalLink, ShieldCheck } from 'lucide-react';
+import {
+  shortenAddress,
+  ARBITRUM_CHAIN_ID,
+  getArbiscanAddressUrl,
+  PAYMENT_ROUTER_ADDRESS,
+  PaymentRouterABI,
+  ERC20ABI,
+} from '@/lib/chain';
+import { buildPaymentUrl } from '@/lib/payment';
 import { useWalletConnection } from '@/lib/wallet';
-import { encodeFunctionData, type Address } from 'viem';
-import { ERC20ABI } from '@/lib/chain';
+import { encodeFunctionData, keccak256, toHex, toBytes, type Address } from 'viem';
+import { publicClient } from '@/lib/chain';
 
 type PaymentLink = {
   code: string;
@@ -15,8 +22,12 @@ type PaymentLink = {
   token: string;
   amount: string;
   description: string | null;
+  onChain: boolean;
+  linkId: string | null;
   createdAt: string;
 };
+
+type PayStep = 'idle' | 'approving' | 'approved' | 'paying' | 'done';
 
 function CopyBtn({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -39,6 +50,10 @@ function CopyBtn({ value }: { value: string }) {
   );
 }
 
+function deriveLinkId(code: string): `0x${string}` {
+  return keccak256(toHex(toBytes(code)));
+}
+
 export default function PaymentPageClient({
   link,
   tokenSymbol,
@@ -49,55 +64,144 @@ export default function PaymentPageClient({
   displayAmount: string;
 }) {
   const wallet = useWalletConnection();
-  const [paying, setPaying] = useState(false);
+  const [step, setStep] = useState<PayStep>('idle');
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [allowance, setAllowance] = useState<bigint>(0n);
 
-  const eip681 = buildEIP681Uri(link.token, link.wallet, link.amount);
+  const linkId = link.linkId || deriveLinkId(link.code);
+  const requiredAmount = BigInt(link.amount);
+  const paymentUrl = buildPaymentUrl(link.code);
+  const hasEnoughAllowance = allowance >= requiredAmount;
+  const useRouter = link.onChain;
+
+  const checkAllowance = useCallback(async () => {
+    if (!wallet.address || !useRouter) return;
+    try {
+      const result = await publicClient.readContract({
+        address: link.token as Address,
+        abi: ERC20ABI,
+        functionName: 'allowance',
+        args: [wallet.address as Address, PAYMENT_ROUTER_ADDRESS as Address],
+      });
+      setAllowance(result as bigint);
+    } catch {
+      setAllowance(0n);
+    }
+  }, [wallet.address, link.token, useRouter]);
+
+  useEffect(() => {
+    checkAllowance();
+  }, [checkAllowance]);
+
+  const handleApprove = async () => {
+    setError('');
+    setStep('approving');
+    try {
+      const data = encodeFunctionData({
+        abi: ERC20ABI,
+        functionName: 'approve',
+        args: [PAYMENT_ROUTER_ADDRESS as Address, requiredAmount],
+      });
+
+      await (window as any).ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{
+          from: wallet.address,
+          to: link.token,
+          data,
+        }],
+      });
+
+      // Poll for allowance update
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        await checkAllowance();
+        const fresh = await publicClient.readContract({
+          address: link.token as Address,
+          abi: ERC20ABI,
+          functionName: 'allowance',
+          args: [wallet.address as Address, PAYMENT_ROUTER_ADDRESS as Address],
+        }) as bigint;
+        if (fresh >= requiredAmount) {
+          setAllowance(fresh);
+          setStep('approved');
+          return;
+        }
+      }
+      setStep('approved');
+    } catch (err: any) {
+      setStep('idle');
+      if (err?.code === 4001) setError('Approval rejected');
+      else setError(err?.message || 'Approval failed');
+    }
+  };
 
   const handlePay = async () => {
     setError('');
-    setPaying(true);
-
+    setStep('paying');
     try {
-      if (!wallet.address) {
-        await wallet.connect();
-        return;
-      }
+      if (useRouter) {
+        const data = encodeFunctionData({
+          abi: PaymentRouterABI,
+          functionName: 'pay',
+          args: [linkId as `0x${string}`],
+        });
 
-      if (wallet.chainId !== ARBITRUM_CHAIN_ID) {
-        await wallet.switchChain();
-        return;
-      }
+        const hash = await (window as any).ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from: wallet.address,
+            to: PAYMENT_ROUTER_ADDRESS,
+            data,
+          }],
+        });
+        setTxHash(hash);
+      } else {
+        // Fallback: direct transfer for links not yet on-chain
+        const data = encodeFunctionData({
+          abi: ERC20ABI,
+          functionName: 'transfer',
+          args: [link.wallet as Address, requiredAmount],
+        });
 
-      const data = encodeFunctionData({
-        abi: ERC20ABI,
-        functionName: 'transfer',
-        args: [link.wallet as Address, BigInt(link.amount)],
-      });
-
-      const hash = await (window as any).ethereum.request({
-        method: 'eth_sendTransaction',
-        params: [
-          {
+        const hash = await (window as any).ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
             from: wallet.address,
             to: link.token,
             data,
-          },
-        ],
-      });
-
-      setTxHash(hash);
-    } catch (err: any) {
-      if (err?.code === 4001) {
-        setError('Transaction rejected');
-      } else {
-        setError(err?.message || 'Transaction failed');
+          }],
+        });
+        setTxHash(hash);
       }
-    } finally {
-      setPaying(false);
+      setStep('done');
+    } catch (err: any) {
+      setStep(hasEnoughAllowance ? 'approved' : 'idle');
+      if (err?.code === 4001) setError('Transaction rejected');
+      else setError(err?.message || 'Transaction failed');
     }
   };
+
+  const handleConnect = async () => {
+    setError('');
+    try {
+      await wallet.connect();
+    } catch (err: any) {
+      setError(err?.message || 'Connection failed');
+    }
+  };
+
+  const handleSwitchChain = async () => {
+    setError('');
+    try {
+      await wallet.switchChain();
+    } catch (err: any) {
+      setError(err?.message || 'Chain switch failed');
+    }
+  };
+
+  const isReady = wallet.address && wallet.chainId === ARBITRUM_CHAIN_ID;
 
   return (
     <main className="min-h-screen flex items-center justify-center px-4 py-12">
@@ -114,11 +218,20 @@ export default function PaymentPageClient({
         </div>
 
         <div className="bg-white rounded-xl p-4 mx-auto w-fit mb-5">
-          <QRCode value={eip681} size={200} level="M" />
+          <QRCode value={paymentUrl} size={200} level="M" />
         </div>
 
+        {useRouter && (
+          <div className="flex items-center justify-center gap-1.5 mb-4">
+            <ShieldCheck className="w-3.5 h-3.5 text-[#0BB89A]" />
+            <span className="text-xs text-[#0BB89A]">
+              On-chain enforced — amount and recipient are locked
+            </span>
+          </div>
+        )}
+
         <p className="text-xs text-white/50 text-center mb-5">
-          Scan with any wallet&apos;s QR scanner to pay instantly on Arbitrum.
+          Scan or share this link to request payment on Arbitrum.
         </p>
 
         <div className="space-y-2 mb-5">
@@ -151,7 +264,7 @@ export default function PaymentPageClient({
           </div>
         </div>
 
-        {txHash ? (
+        {step === 'done' && txHash ? (
           <div className="bg-[#0BB89A]/10 border border-[#0BB89A]/30 rounded-xl p-4 text-center">
             <p className="text-[#0BB89A] font-medium text-sm mb-1">Payment Sent</p>
             <a
@@ -164,30 +277,69 @@ export default function PaymentPageClient({
             </a>
           </div>
         ) : (
-          <>
-            {error && <p className="text-red-400 text-xs text-center mb-3">{error}</p>}
-            <button
-              onClick={handlePay}
-              disabled={paying}
-              className="w-full bg-[#0BB89A] hover:bg-[#0BB89A]/90 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
-            >
-              {paying ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Processing...
-                </>
-              ) : !wallet.address ? (
-                <>
-                  <Wallet className="w-4 h-4" />
-                  Connect Wallet to Pay
-                </>
-              ) : wallet.chainId !== ARBITRUM_CHAIN_ID ? (
-                'Switch to Arbitrum'
-              ) : (
-                `Pay $${displayAmount} ${tokenSymbol}`
-              )}
-            </button>
-          </>
+          <div className="space-y-2.5">
+            {error && <p className="text-red-400 text-xs text-center">{error}</p>}
+
+            {!wallet.address ? (
+              <button
+                onClick={handleConnect}
+                className="w-full bg-[#0BB89A] hover:bg-[#0BB89A]/90 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                <Wallet className="w-4 h-4" />
+                Connect Wallet to Pay
+              </button>
+            ) : wallet.chainId !== ARBITRUM_CHAIN_ID ? (
+              <button
+                onClick={handleSwitchChain}
+                className="w-full bg-[#0BB89A] hover:bg-[#0BB89A]/90 text-white font-medium py-3 rounded-xl transition-colors"
+              >
+                Switch to Arbitrum
+              </button>
+            ) : useRouter && !hasEnoughAllowance ? (
+              <button
+                onClick={handleApprove}
+                disabled={step === 'approving'}
+                className="w-full bg-white/10 hover:bg-white/20 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                {step === 'approving' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Approving...
+                  </>
+                ) : (
+                  <>
+                    Step 1: Approve ${displayAmount} {tokenSymbol}
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={handlePay}
+                disabled={step === 'paying'}
+                className="w-full bg-[#0BB89A] hover:bg-[#0BB89A]/90 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                {step === 'paying' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : useRouter ? (
+                  <>
+                    {hasEnoughAllowance ? 'Step 2: ' : ''}Pay ${displayAmount} {tokenSymbol}
+                  </>
+                ) : (
+                  `Pay $${displayAmount} ${tokenSymbol}`
+                )}
+              </button>
+            )}
+
+            {useRouter && isReady && (
+              <div className="flex justify-center gap-2 pt-1">
+                <div className={`w-2 h-2 rounded-full ${hasEnoughAllowance ? 'bg-[#0BB89A]' : 'bg-white/20'}`} />
+                <div className={`w-2 h-2 rounded-full ${step === 'done' ? 'bg-[#0BB89A]' : 'bg-white/20'}`} />
+              </div>
+            )}
+          </div>
         )}
       </div>
     </main>

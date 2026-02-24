@@ -20,6 +20,9 @@ export const USDT_ADDRESS = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9' as cons
 // Factory contract address
 export const FACTORY_ADDRESS = '0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9' as const;
 
+// PaymentRouter contract address
+export const PAYMENT_ROUTER_ADDRESS = (process.env.NEXT_PUBLIC_PAYMENT_ROUTER_ADDRESS || '0xe65CBf11e2F997e3a5Fa2E8c12596C1992d51c95') as `0x${string}`;
+
 // Token metadata
 export const TOKEN_INFO: Record<string, { symbol: string; decimals: number }> = {
   [USDC_ADDRESS.toLowerCase()]: { symbol: 'USDC', decimals: 6 },
@@ -142,6 +145,14 @@ export const ERC20ABI = [
   { inputs: [], name: 'symbol', outputs: [{ type: 'string' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'decimals', outputs: [{ type: 'uint8' }], stateMutability: 'view', type: 'function' },
   { inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }], name: 'transfer', outputs: [{ type: 'bool' }], stateMutability: 'nonpayable', type: 'function' },
+  { inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], name: 'approve', outputs: [{ type: 'bool' }], stateMutability: 'nonpayable', type: 'function' },
+  { inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }], name: 'allowance', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+] as const;
+
+export const PaymentRouterABI = [
+  { inputs: [{ name: 'id', type: 'bytes32' }], name: 'pay', outputs: [], stateMutability: 'nonpayable', type: 'function' },
+  { inputs: [{ name: 'id', type: 'bytes32' }], name: 'linkExists', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
+  { inputs: [{ name: '', type: 'bytes32' }], name: 'links', outputs: [{ name: 'token', type: 'address' }, { name: 'recipient', type: 'address' }, { name: 'amount', type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -13,7 +13,7 @@ import { Worker, Job } from "bullmq";
 import { encodeFunctionData, parseEventLogs, formatGwei } from "viem";
 import { redisConnection } from "../watcher/queue.js";
 import { publicClient, walletClient, oracleAccount } from "./client.js";
-import { EscrowFactoryABI, EscrowABI } from "../contracts/abis.js";
+import { EscrowFactoryABI, EscrowABI, PaymentRouterABI } from "../contracts/abis.js";
 import { getNetwork } from "../config/networks.js";
 import { ENV } from "../config/env.js";
 import { TxJobData, TxJobResult, TxMethod } from "./tx-queue.js";
@@ -220,6 +220,20 @@ async function sendTransaction(
         abi: EscrowABI,
         functionName: "sweepToTreasuryAfterArbWindow",
         args: [],
+      });
+      break;
+
+    case "createPaymentLink":
+      to = network.PAYMENT_ROUTER as `0x${string}`;
+      data = encodeFunctionData({
+        abi: PaymentRouterABI,
+        functionName: "createLink",
+        args: [
+          params.linkId as `0x${string}`,
+          params.token as `0x${string}`,
+          params.recipient as `0x${string}`,
+          BigInt(params.amount as string),
+        ],
       });
       break;
 

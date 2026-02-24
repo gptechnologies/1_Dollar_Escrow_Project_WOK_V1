@@ -20,7 +20,8 @@ export type TxMethod =
   | "expireIfNotConfirmed"
   | "expireIfNotFunded"
   | "sweepToTreasury"
-  | "sweepToTreasuryAfterArbWindow";
+  | "sweepToTreasuryAfterArbWindow"
+  | "createPaymentLink";
 
 export interface TxJobData {
   method: TxMethod;

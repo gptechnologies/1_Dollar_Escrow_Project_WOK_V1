@@ -8,6 +8,8 @@ type PaymentLink = {
   token: string;
   amount: string;
   description: string | null;
+  onChain: boolean;
+  linkId: string | null;
   createdAt: string;
 };
 

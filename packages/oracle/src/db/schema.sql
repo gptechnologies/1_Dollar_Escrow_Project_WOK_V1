@@ -134,6 +134,27 @@ CREATE TABLE IF NOT EXISTS payment_links (
 );
 CREATE INDEX IF NOT EXISTS idx_payment_links_code ON payment_links(code);
 
+-- Migration: Add on_chain and link_id columns to payment_links
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'payment_links' AND column_name = 'on_chain'
+  ) THEN
+    ALTER TABLE payment_links ADD COLUMN on_chain BOOLEAN DEFAULT FALSE;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'payment_links' AND column_name = 'link_id'
+  ) THEN
+    ALTER TABLE payment_links ADD COLUMN link_id BYTEA;
+  END IF;
+END $$;
+
 -- Migration: Change processed_tx primary key from tx_hash to (tx_hash, escrow)
 -- This fixes multi-log transaction handling and improves reorg safety
 DO $$

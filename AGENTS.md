@@ -13,6 +13,7 @@
 | **RPC (HTTP)** | `https://arb1.arbitrum.io/rpc` |
 | **RPC (WSS)** | `wss://arb1.arbitrum.io/rpc` |
 | **EscrowFactory** | `0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9` |
+| **PaymentRouter** | `0xe65CBf11e2F997e3a5Fa2E8c12596C1992d51c95` |
 | **USDC** | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (6 decimals) |
 | **USDT** | `0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9` (6 decimals) |
 
@@ -391,9 +392,83 @@ Fees are deducted from the seller's payout at resolution time. The buyer always 
 | `sweepToTreasuryAfterArbWindow()` | Anyone |
 | `sweepStrayToken()` | Oracle only |
 
-## Payment Links (Off-Chain API)
+## PaymentRouter (On-Chain Enforced Payments)
 
-Payment links are not on-chain -- they are stored in the Crow backend database and generate EIP-681 QR codes for direct wallet-to-wallet ERC-20 transfers.
+| Item | Value |
+|------|-------|
+| **PaymentRouter** | `0xe65CBf11e2F997e3a5Fa2E8c12596C1992d51c95` |
+
+The PaymentRouter stores payment link parameters on-chain. When a payer calls `pay(linkId)`, the contract reads the stored token, recipient, and amount -- the payer cannot alter them. This is used for the "Accept Stablecoins" QR code feature.
+
+### How It Works
+
+1. Merchant creates a payment link via the API (see below)
+2. The oracle registers the link on-chain via `createLink(id, token, recipient, amount)`
+3. Payer visits the payment page, approves the exact token amount to the router, then calls `pay(id)`
+4. The router executes `transferFrom(payer, recipient, amount)` -- enforced on-chain
+
+### Contract ABI
+
+```solidity
+function createLink(bytes32 id, address token, address recipient, uint256 amount) external  // owner only
+function pay(bytes32 id) external  // anyone, requires prior ERC-20 approve
+function linkExists(bytes32 id) external view returns (bool)
+function links(bytes32 id) external view returns (address token, address recipient, uint256 amount)
+```
+
+### Link ID Derivation
+
+The `bytes32 id` is derived deterministically from the off-chain code:
+
+```typescript
+import { keccak256, toHex, toBytes } from 'viem';
+const linkId = keccak256(toHex(toBytes(code)));  // code = nanoid(10) from the API
+```
+
+### viem Example: Pay a Link
+
+```typescript
+import { createPublicClient, createWalletClient, http, keccak256, toHex, toBytes } from 'viem';
+import { arbitrum } from 'viem/chains';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const ROUTER = '0xe65CBf11e2F997e3a5Fa2E8c12596C1992d51c95';
+const USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
+
+const erc20ABI = [{
+  inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }],
+  name: 'approve', outputs: [{ type: 'bool' }], stateMutability: 'nonpayable', type: 'function',
+}] as const;
+
+const routerABI = [{
+  inputs: [{ name: 'id', type: 'bytes32' }],
+  name: 'pay', outputs: [], stateMutability: 'nonpayable', type: 'function',
+}] as const;
+
+const account = privateKeyToAccount('0xPAYER_KEY');
+const publicClient = createPublicClient({ chain: arbitrum, transport: http() });
+const walletClient = createWalletClient({ account, chain: arbitrum, transport: http() });
+
+const code = 'a8Kx3mQ7pR';
+const linkId = keccak256(toHex(toBytes(code)));
+const amount = 100_000_000n; // $100 USDC
+
+// Step 1: Approve router for exact amount
+await walletClient.writeContract({
+  address: USDC, abi: erc20ABI, functionName: 'approve',
+  args: [ROUTER, amount],
+});
+
+// Step 2: Pay via router
+await walletClient.writeContract({
+  address: ROUTER, abi: routerABI, functionName: 'pay',
+  args: [linkId],
+});
+```
+
+## Payment Links API
+
+Payment links are created via the Crow backend API. The oracle automatically registers each link on the PaymentRouter contract.
 
 ### Create a Payment Link
 
@@ -408,7 +483,7 @@ Content-Type: application/json
   "description": "Invoice #42"
 }
 
-Response: { "code": "a8Kx3mQ7pR" }
+Response: { "code": "a8Kx3mQ7pR", "linkId": "0x..." }
 ```
 
 ### Fetch a Payment Link
@@ -422,23 +497,13 @@ Response: {
   "token": "0x...",
   "amount": "100000000",
   "description": "Invoice #42",
+  "onChain": true,
+  "linkId": "0x...",
   "createdAt": "2026-02-23T..."
 }
 ```
 
-### EIP-681 QR URI Format
-
-The QR code encodes a standard EIP-681 URI that wallet QR scanners recognize:
-
-```
-ethereum:<TOKEN_ADDRESS>@42161/transfer?address=<RECIPIENT>&uint256=<AMOUNT>
-```
-
-Example for $100 USDC:
-
-```
-ethereum:0xaf88d065e77c8cC2239327C5EDb3A432268e5831@42161/transfer?address=0xRECIPIENT&uint256=100000000
-```
+The `onChain` field indicates whether the link is registered on the PaymentRouter contract. If `true`, the payer must approve + pay via the router. If `false` (rare, transient), the payer falls back to a direct ERC-20 transfer.
 
 Payment page URL: `https://usecrow.com/p/<code>`
 

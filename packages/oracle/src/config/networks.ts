@@ -8,6 +8,7 @@ export interface NetworkConfig {
   RPC_HTTP: string;
   RPC_WSS: string;
   FACTORY: string;
+  PAYMENT_ROUTER: string;
   USDC: string;
   USDT: string;
   confirmationAmount: bigint; // $1 = 1e6 (6 decimals for both USDC/USDT)
@@ -23,6 +24,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     RPC_HTTP: process.env.RPC_HTTP || "https://sepolia-rollup.arbitrum.io/rpc",
     RPC_WSS: process.env.RPC_WSS || "wss://sepolia-rollup.arbitrum.io/rpc",
     FACTORY: process.env.FACTORY_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_FACTORY",
+    PAYMENT_ROUTER: process.env.PAYMENT_ROUTER_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_ROUTER",
     USDC: process.env.USDC_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_MOCK_USDC",
     USDT: process.env.USDT_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_MOCK_USDT",
     confirmationAmount: 1_000_000n, // $1 (6 decimals)
@@ -36,6 +38,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     RPC_HTTP: process.env.RPC_HTTP || "https://arb1.arbitrum.io/rpc",
     RPC_WSS: process.env.RPC_WSS || "wss://arb1.arbitrum.io/rpc",
     FACTORY: process.env.FACTORY_ADDRESS || "0x_REPLACE_WITH_DEPLOYED_FACTORY",
+    PAYMENT_ROUTER: process.env.PAYMENT_ROUTER_ADDRESS || "0xe65CBf11e2F997e3a5Fa2E8c12596C1992d51c95",
     USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", // Real USDC on Arbitrum One
     USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", // Real USDT on Arbitrum One
     confirmationAmount: 1_000_000n, // $1 (6 decimals)

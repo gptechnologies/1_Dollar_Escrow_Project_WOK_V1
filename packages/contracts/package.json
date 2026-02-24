@@ -8,6 +8,7 @@
     "deploy:prod": "hardhat run scripts/deploy-prod.ts --network arbitrumOne",
     "deploy:sepolia-v2": "hardhat run scripts/deploy-sepolia-v2.ts --network arbitrumSepolia",
     "deploy:prod-v2": "hardhat run scripts/deploy-prod-v2.ts --network arbitrumOne",
+    "deploy:payment-router": "hardhat run scripts/deploy-payment-router.ts --network arbitrumOne",
     "verify": "hardhat verify --network arbitrumSepolia",
     "test": "hardhat test"
   },
