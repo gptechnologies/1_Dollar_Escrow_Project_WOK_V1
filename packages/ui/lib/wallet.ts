@@ -306,30 +306,31 @@ export function encodeCreateEscrowTx(params: {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Build MetaMask deep link URL
- * Opens the current page in MetaMask's in-app browser
+ * Build MetaMask deep link URL.
+ * Uses the native metamask:// protocol which is more reliable than the
+ * universal link (metamask.app.link) that can crash on some iOS versions.
  */
 export function buildMetaMaskDeepLink(url: string): string {
-  // MetaMask uses metamask://dapp/<url>
   const cleanUrl = url.replace(/^https?:\/\//, '');
-  return `https://metamask.app.link/dapp/${cleanUrl}`;
+  return `metamask://dapp/${cleanUrl}`;
 }
 
 /**
- * Build Coinbase Wallet deep link URL
- * Opens the current page in Coinbase Wallet's in-app browser
+ * Build Coinbase Wallet deep link URL.
+ * Uses the native cbwallet:// protocol for reliability.
  */
 export function buildCoinbaseWalletDeepLink(url: string): string {
-  // Coinbase Wallet uses cbwallet://dapp?url=<encoded_url>
-  return `https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(url)}`;
+  const cleanUrl = url.replace(/^https?:\/\//, '');
+  return `cbwallet://dapp?url=${encodeURIComponent(`https://${cleanUrl}`)}`;
 }
 
 /**
- * Get the current page URL (for deep links)
+ * Get the current page URL (for deep links).
+ * Returns origin + pathname only (no query/hash) for clean deep links.
  */
 export function getCurrentUrl(): string {
   if (typeof window === 'undefined') return '';
-  return window.location.href;
+  return window.location.origin + window.location.pathname;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
