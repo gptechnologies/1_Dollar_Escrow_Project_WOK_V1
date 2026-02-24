@@ -11,10 +11,9 @@ import {
   PaymentRouterABI,
   ERC20ABI,
 } from '@/lib/chain';
-import { buildPaymentUrl } from '@/lib/payment';
+import { buildPaymentUrl, buildEIP681Uri } from '@/lib/payment';
 import {
   useWalletConnection,
-  buildMetaMaskDeepLink,
   buildCoinbaseWalletDeepLink,
   getCurrentUrl,
 } from '@/lib/wallet';
@@ -287,7 +286,7 @@ export default function PaymentPageClient({
             {error && <p className="text-red-400 text-xs text-center">{error}</p>}
 
             {!wallet.address && !wallet.hasInjectedWallet ? (
-              <WalletDeepLinks />
+              <WalletDeepLinks token={link.token} recipient={link.wallet} amount={link.amount} />
             ) : !wallet.address ? (
               <button
                 onClick={handleConnect}
@@ -354,18 +353,19 @@ export default function PaymentPageClient({
   );
 }
 
-function WalletDeepLinks() {
+function WalletDeepLinks({ token, recipient, amount }: { token: string; recipient: string; amount: string }) {
   const currentUrl = typeof window !== 'undefined' ? getCurrentUrl() : '';
+  const eip681Uri = buildEIP681Uri(token, recipient, amount);
 
   return (
     <div className="space-y-2.5">
-      <p className="text-xs text-white/50 text-center mb-1">Open in your wallet to pay</p>
+      <p className="text-xs text-white/50 text-center mb-1">Pay with your wallet</p>
       <a
-        href={buildMetaMaskDeepLink(currentUrl)}
+        href={eip681Uri}
         className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl bg-[#F6851B]/10 border border-[#F6851B]/30 text-white font-medium hover:bg-[#F6851B]/20 active:scale-[0.99] transition-all"
       >
         <MetaMaskIcon />
-        Open in MetaMask
+        Pay with MetaMask
         <ExternalLink className="w-4 h-4 ml-auto opacity-50" />
       </a>
       <a
