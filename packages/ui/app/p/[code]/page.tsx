@@ -63,7 +63,10 @@ export default async function PaymentPage({ params }: PageProps) {
 
   if (!link) {
     return (
-      <main className="min-h-screen flex items-center justify-center px-4">
+      <main className="min-h-screen relative flex items-center justify-center px-4">
+        <div className="fixed inset-0 -z-20 bg-[#0d0618]" />
+        <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat opacity-40" />
+        <div className="fixed inset-0 -z-10 bg-gradient-to-b from-black/30 via-transparent to-black/50" />
         <div className="surface-card p-8 max-w-md text-center">
           <h1 className="text-xl font-bold text-white mb-2">Payment Not Found</h1>
           <p className="text-white/60 text-sm">

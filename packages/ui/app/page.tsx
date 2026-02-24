@@ -1,6 +1,5 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import { Suspense } from 'react';
 import CreateEscrowCard from '@/components/CreateEscrowCard';
 import EscrowDashboard from '@/components/EscrowDashboard';
@@ -8,13 +7,6 @@ import AcceptPaymentCard from '@/components/AcceptPaymentCard';
 import InfoAccordion from '@/components/InfoAccordion';
 import { ChevronDown } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
-
-const SplineHero = dynamic(() => import('@/components/SplineHero'), {
-  ssr: false,
-  loading: () => (
-    <div className="fixed inset-0 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat z-0" />
-  ),
-});
 
 type HomePrefill = {
   amount?: string;
@@ -34,8 +26,10 @@ function HomeContent({
 }) {
   return (
     <main className="min-h-screen relative">
-      {/* Global Spline Background (fixed, covers entire page) */}
-      <SplineHero />
+      {/* Clouds background (matches TxPageShell) */}
+      <div className="fixed inset-0 -z-20 bg-[#0d0618]" />
+      <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat opacity-40" />
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-black/30 via-transparent to-black/50" />
 
       {/* All foreground content */}
       <div className="relative z-10">

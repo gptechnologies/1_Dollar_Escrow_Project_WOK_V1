@@ -49,14 +49,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
-        <link
-          rel="preload"
-          href="/scene.splinecode"
-          as="fetch"
-          crossOrigin="anonymous"
-        />
-      </head>
+      <head />
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

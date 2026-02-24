@@ -204,7 +204,10 @@ export default function PaymentPageClient({
   const isReady = wallet.address && wallet.chainId === ARBITRUM_CHAIN_ID;
 
   return (
-    <main className="min-h-screen flex items-center justify-center px-4 py-12">
+    <main className="min-h-screen relative flex items-center justify-center px-4 py-12">
+      <div className="fixed inset-0 -z-20 bg-[#0d0618]" />
+      <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat opacity-40" />
+      <div className="fixed inset-0 -z-10 bg-gradient-to-b from-black/30 via-transparent to-black/50" />
       <div className="surface-card p-6 max-w-sm w-full">
         {link.description && (
           <h1 className="text-lg font-semibold text-white mb-1 text-center">
