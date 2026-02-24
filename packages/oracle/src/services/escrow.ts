@@ -17,6 +17,7 @@ import { parseEventLogs } from "viem";
 import { publicClient } from "../blockchain/client.js";
 import { EscrowFactoryABI, EscrowABI } from "../contracts/abis.js";
 import { ENV } from "../config/env.js";
+import { getNetwork } from "../config/networks.js";
 import { sql, hexToBuffer, bufferToHex } from "../db/client.js";
 import { nanoid } from "nanoid";
 import { submitTxJobAndWait } from "../blockchain/tx-queue.js";
@@ -164,6 +165,158 @@ export async function createEscrow(params: {
     code,
     txHash,
     token: tokenAddress,
+    confirmDeadline,
+    arbWindowEnd,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Permissionless Registration (index on-chain escrow into DB)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Shared upsert for both registerEscrow() and watcher backfill.
+ * Idempotent: ON CONFLICT (escrow) preserves existing code and only back-fills
+ * missing created_tx / created_block.
+ */
+export async function upsertEscrowFromEvent(params: {
+  escrowAddress: string;
+  payout: string;
+  funder: string;
+  tokenAddress: string;
+  targetAmount: string;
+  deadline: number;
+  confirmDeadline: number;
+  arbWindowEnd: number;
+  arbitrator1: string;
+  arbitrator2: string;
+  arbitrator3: string;
+  txHash: string;
+  createdBlock: string;
+}): Promise<{ code: string; isNew: boolean }> {
+  const arb1Buf = params.arbitrator1 === ZERO_ADDRESS ? null : hexToBuffer(params.arbitrator1);
+  const arb2Buf = params.arbitrator2 === ZERO_ADDRESS ? null : hexToBuffer(params.arbitrator2);
+  const arb3Buf = params.arbitrator3 === ZERO_ADDRESS ? null : hexToBuffer(params.arbitrator3);
+
+  // Check if already indexed
+  const existing = await sql`
+    SELECT code FROM escrows WHERE escrow = ${hexToBuffer(params.escrowAddress)}
+  `;
+
+  if (existing.length > 0) {
+    // Back-fill created_tx / created_block if they were missing
+    await sql`
+      UPDATE escrows
+      SET created_tx = COALESCE(escrows.created_tx, ${params.txHash}),
+          created_block = COALESCE(escrows.created_block, ${params.createdBlock}),
+          updated_at = NOW()
+      WHERE escrow = ${hexToBuffer(params.escrowAddress)}
+    `;
+    return { code: existing[0].code as string, isNew: false };
+  }
+
+  const code = nanoid(10);
+
+  await sql`
+    INSERT INTO escrows (
+      escrow, code, network, payout, funder, token, target_amount,
+      deadline, confirm_deadline, phase_cached, created_tx, created_block,
+      arbitrator1, arbitrator2, arbitrator3, arb_window_end
+    )
+    VALUES (
+      ${hexToBuffer(params.escrowAddress)},
+      ${code},
+      ${ENV.CHAIN_ID.toString()},
+      ${hexToBuffer(params.payout)},
+      ${hexToBuffer(params.funder)},
+      ${hexToBuffer(params.tokenAddress)},
+      ${params.targetAmount},
+      ${params.deadline},
+      ${params.confirmDeadline},
+      0,
+      ${params.txHash},
+      ${params.createdBlock},
+      ${arb1Buf},
+      ${arb2Buf},
+      ${arb3Buf},
+      ${params.arbWindowEnd}
+    )
+    ON CONFLICT (escrow) DO UPDATE SET
+      created_tx = COALESCE(escrows.created_tx, EXCLUDED.created_tx),
+      created_block = COALESCE(escrows.created_block, EXCLUDED.created_block),
+      updated_at = NOW()
+  `;
+
+  return { code, isNew: true };
+}
+
+/**
+ * Register an on-chain escrow by verifying a transaction receipt.
+ * Public endpoint — validates receipt, parses event, upserts into DB.
+ */
+export async function registerEscrow(txHash: string): Promise<{
+  escrow: string;
+  code: string;
+  txHash: string;
+  token: string;
+  phase: number;
+  confirmDeadline: number;
+  arbWindowEnd: number;
+}> {
+  const receipt = await publicClient.getTransactionReceipt({
+    hash: txHash as `0x${string}`,
+  });
+
+  if (receipt.status !== "success") {
+    throw new Error("Transaction failed or was reverted");
+  }
+
+  // Verify the tx was sent to the factory for this network
+  const network = getNetwork(ENV.CHAIN_ID);
+  if (receipt.to?.toLowerCase() !== network.FACTORY.toLowerCase()) {
+    throw new Error("Transaction was not sent to the EscrowFactory");
+  }
+
+  const logs = parseEventLogs({
+    abi: EscrowFactoryABI,
+    logs: receipt.logs,
+    eventName: "EscrowCreated",
+  });
+
+  if (logs.length === 0) {
+    throw new Error("EscrowCreated event not found in receipt");
+  }
+
+  const event = logs[0].args as any;
+  const escrowAddress = (event.escrow as string).toLowerCase();
+  const tokenAddress = event.token as string;
+  const confirmDeadline = Number(event.confirmDeadline);
+  const arbWindowEnd = Number(event.arbWindowEnd);
+
+  const { code } = await upsertEscrowFromEvent({
+    escrowAddress,
+    payout: event.payout as string,
+    funder: event.funder as string,
+    tokenAddress,
+    targetAmount: event.targetAmount.toString(),
+    deadline: Number(event.deadline),
+    confirmDeadline,
+    arbWindowEnd,
+    arbitrator1: event.arbitrator1 as string,
+    arbitrator2: event.arbitrator2 as string,
+    arbitrator3: event.arbitrator3 as string,
+    txHash,
+    createdBlock: receipt.blockNumber.toString(),
+  });
+
+  console.log(`📋 Escrow registered: ${escrowAddress} (code: ${code})`);
+
+  return {
+    escrow: escrowAddress,
+    code,
+    txHash,
+    token: tokenAddress,
+    phase: 0,
     confirmDeadline,
     arbWindowEnd,
   };

@@ -82,7 +82,7 @@ export default function TxPageShell({ children, title }: TxPageShellProps) {
                 />
               </svg>
               <p className="text-sm text-yellow-200/80">
-                <strong className="text-yellow-300">Security Notice:</strong> Verify the escrow address and parties before signing. 
+                <strong className="text-yellow-300">Security Notice:</strong> Verify the lookup code, parties, and amounts before signing. 
                 Never sign transactions blindly. Only interact with escrows you created or were invited to.
               </p>
             </div>

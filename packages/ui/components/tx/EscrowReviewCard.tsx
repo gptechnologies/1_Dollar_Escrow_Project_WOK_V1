@@ -23,6 +23,7 @@ type EscrowReviewCardProps = {
   escrow: EscrowState;
   action: ActionType;
   connectedAddress?: string | null;
+  code?: string | null;
 };
 
 type EligibilityResult = {
@@ -56,7 +57,8 @@ const ACTION_INFO: Record<ActionType, {
 export default function EscrowReviewCard({ 
   escrow, 
   action, 
-  connectedAddress 
+  connectedAddress,
+  code,
 }: EscrowReviewCardProps) {
   const actionInfo = ACTION_INFO[action];
   const eligibility = checkEligibility(escrow, action, connectedAddress);
@@ -81,7 +83,16 @@ export default function EscrowReviewCard({
 
       {/* Escrow Details */}
       <div className="p-6 space-y-5">
-        {/* Escrow Address */}
+        {/* Lookup Code (primary identifier) */}
+        {code && (
+          <DetailRow 
+            label="Lookup Code"
+            value={code}
+            showCopy
+          />
+        )}
+
+        {/* Escrow Address (secondary) */}
         <DetailRow 
           label="Escrow Address"
           value={escrow.escrow}

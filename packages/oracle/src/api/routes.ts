@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { requireAuth, validateBody } from "./middleware.js";
-import { CreateEscrowSchema } from "./types.js";
-import { createEscrow, getEscrowStatus, listEscrows } from "../services/escrow.js";
+import { CreateEscrowSchema, RegisterEscrowSchema } from "./types.js";
+import { createEscrow, registerEscrow, getEscrowStatus, listEscrows } from "../services/escrow.js";
+import { addActiveEscrow } from "../watcher/events.js";
 
 const router = Router();
 
@@ -37,6 +38,21 @@ router.post("/escrow/create", requireAuth, validateBody(CreateEscrowSchema), asy
       confirmDeadline: result.confirmDeadline,
       arbWindowEnd: result.arbWindowEnd,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /escrow/register
+ * Public endpoint (no auth) - register an on-chain escrow by tx hash.
+ * Verifies receipt, parses EscrowCreated event, upserts into DB.
+ */
+router.post("/escrow/register", validateBody(RegisterEscrowSchema), async (req, res, next) => {
+  try {
+    const result = await registerEscrow(req.body.txHash);
+    addActiveEscrow(result.escrow);
+    res.json(result);
   } catch (error) {
     next(error);
   }

@@ -394,24 +394,29 @@ export default function EscrowCard({
 
   return (
     <div className="surface-card overflow-hidden">
-      {/* Header: Escrow Address + Phase */}
+      {/* Header: Lookup Code + Phase */}
       <div className="px-4 py-3 border-b border-white/10">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] text-white/50 mb-1">Escrow Address</div>
+            <div className="text-[11px] text-white/50 mb-1">Lookup Code</div>
             <div className="flex items-center gap-1 flex-wrap">
-              <code className="font-mono text-sm text-white/90 break-all">
-                {escrow}
+              <code className="font-mono text-sm text-white/90">
+                {code}
               </code>
-              <CopyButton value={escrow} />
+              <CopyButton value={code} />
+            </div>
+            <div className="flex items-center gap-1 mt-1.5">
+              <code className="font-mono text-[11px] text-white/50 break-all">
+                {shortenAddress(escrow)}
+              </code>
               <a
                 href={getArbiscanAddressUrl(escrow)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-1.5 rounded hover:bg-white/10 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center shrink-0"
+                className="p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center shrink-0"
                 title="View on Arbiscan"
               >
-                <ExternalLink className="w-3.5 h-3.5 text-white/50 hover:text-white/80" />
+                <ExternalLink className="w-3 h-3 text-white/40 hover:text-white/70" />
               </a>
             </div>
           </div>

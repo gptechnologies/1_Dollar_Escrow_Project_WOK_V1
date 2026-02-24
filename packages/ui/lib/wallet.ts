@@ -7,7 +7,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { encodeFunctionData, type Address, type Hex } from 'viem';
-import { ARBITRUM_CHAIN_ID, EscrowABI, ERC20ABI } from './chain';
+import { ARBITRUM_CHAIN_ID, EscrowABI, ERC20ABI, EscrowFactoryABI, FACTORY_ADDRESS } from './chain';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -268,6 +268,36 @@ export function encodeFundEscrowTx(escrowAddress: Address, amount: bigint): Hex 
     abi: ERC20ABI,
     functionName: 'transfer',
     args: [escrowAddress, amount],
+  });
+}
+
+/**
+ * Encode EscrowFactory.createEscrowSimple(...) for wallet signing
+ */
+export function encodeCreateEscrowTx(params: {
+  payout: Address;
+  funder: Address;
+  token: Address;
+  targetAmount: bigint;
+  deadline: number;
+  arbitrator1?: Address;
+  arbitrator2?: Address;
+  arbitrator3?: Address;
+}): Hex {
+  const ZERO = '0x0000000000000000000000000000000000000000' as Address;
+  return encodeFunctionData({
+    abi: EscrowFactoryABI,
+    functionName: 'createEscrowSimple',
+    args: [
+      params.payout,
+      params.funder,
+      params.token,
+      params.targetAmount,
+      BigInt(params.deadline),
+      params.arbitrator1 || ZERO,
+      params.arbitrator2 || ZERO,
+      params.arbitrator3 || ZERO,
+    ],
   });
 }
 

@@ -93,7 +93,7 @@ function FinalizePageContent() {
           <div className="text-sm text-white/50">
             <p>Make sure:</p>
             <ul className="list-disc list-inside mt-2 space-y-1">
-              <li>The escrow address is correct</li>
+              <li>The lookup code or escrow address is correct</li>
               <li>The escrow exists on Arbitrum One</li>
               <li>You have a stable internet connection</li>
             </ul>
@@ -175,6 +175,7 @@ function FinalizePageContent() {
           escrow={escrow} 
           action={action}
           connectedAddress={connectedAddress}
+          code={codeParam}
         />
 
         {/* Action Area */}

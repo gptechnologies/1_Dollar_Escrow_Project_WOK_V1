@@ -2,16 +2,20 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Loader2, Copy, ExternalLink, Check, ChevronDown, ClipboardPaste } from 'lucide-react';
+import { Loader2, Copy, ExternalLink, Check, ChevronDown, ClipboardPaste, Wallet } from 'lucide-react';
+import { parseEventLogs, type Address } from 'viem';
 import DeadlineDateTimePicker from './DeadlineDateTimePicker';
 import ShareModal from './ShareModal';
 import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
+import { FACTORY_ADDRESS, EscrowFactoryABI, publicClient } from '@/lib/chain';
+import { useWalletConnection, encodeCreateEscrowTx } from '@/lib/wallet';
 
 interface CreatedEscrow {
   escrow: string;
   code: string;
   token: string;
   confirmDeadline: number;
+  txHash?: string;
 }
 
 // Utility to shorten Ethereum addresses for preview
@@ -37,7 +41,10 @@ type CreateEscrowCardProps = {
   };
 };
 
+type CreateStep = 'form' | 'signing' | 'confirming' | 'registering';
+
 export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProps) {
+  const wallet = useWalletConnection();
   const [amount, setAmount] = useState('');
   const [selectedToken, setSelectedToken] = useState('USDC');
   const [fundingAddress, setFundingAddress] = useState('');
@@ -50,6 +57,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
   const [arbitrator2, setArbitrator2] = useState('');
   const [arbitrator3, setArbitrator3] = useState('');  // Deadlock arbitrator
   const [isLoading, setIsLoading] = useState(false);
+  const [createStep, setCreateStep] = useState<CreateStep>('form');
   const [error, setError] = useState('');
   const [createdEscrow, setCreatedEscrow] = useState<CreatedEscrow | null>(null);
   const [copied, setCopied] = useState(false);
@@ -275,69 +283,131 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
       return;
     }
 
+    // Ensure wallet is connected and on Arbitrum before proceeding
+    if (!wallet.address) {
+      try {
+        await wallet.connect();
+      } catch {
+        setError('Please connect your wallet to create an escrow');
+        return;
+      }
+      return;
+    }
+
     setIsLoading(true);
     setError('');
     setCreatedEscrow(null);
+    setCreateStep('signing');
 
     try {
-      // Get token address
       const tokenOption = TOKEN_OPTIONS.find(t => t.value === selectedToken);
       if (!tokenOption || !tokenOption.address) {
         throw new Error('Token address not configured');
       }
 
-      // Parse amount to token units (6 decimals for USDC/USDT)
-      const amountInUnits = BigInt(Math.floor(parseFloat(amount) * 1_000_000)).toString();
+      const amountInUnits = BigInt(Math.floor(parseFloat(amount) * 1_000_000));
       
-      // Combine date and time into unix timestamp
       const parsedDate = parseDeadlineDate(deadlineDate);
       if (!parsedDate) {
         setIsLoading(false);
+        setCreateStep('form');
         return;
       }
       const combinedDateTime = combineDateTime(parsedDate, deadlineTime)!;
       const deadlineTimestamp = Math.floor(combinedDateTime.getTime() / 1000);
 
-      const arb1 = arbitrator1.trim();
-      const arb2 = arbitrator2.trim();
-      const arb3 = arbitrator3.trim();
+      const arb1 = arbitrator1.trim() || undefined;
+      const arb2 = arbitrator2.trim() || undefined;
+      const arb3 = arbitrator3.trim() || undefined;
 
-      const response = await fetch('/api/escrow/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          payout: counterparty,      // seller
-          funder: fundingAddress,    // buyer
-          token: tokenOption.address, // USDC or USDT address
-          targetAmount: amountInUnits,
-          deadline: deadlineTimestamp,
-          ...(arb1 ? { arbitrator1: arb1 } : {}),
-          ...(arb2 ? { arbitrator2: arb2 } : {}),
-          ...(arb3 ? { arbitrator3: arb3 } : {}),
-        }),
+      const txData = encodeCreateEscrowTx({
+        payout: counterparty as Address,
+        funder: fundingAddress as Address,
+        token: tokenOption.address as Address,
+        targetAmount: amountInUnits,
+        deadline: deadlineTimestamp,
+        arbitrator1: arb1 as Address | undefined,
+        arbitrator2: arb2 as Address | undefined,
+        arbitrator3: arb3 as Address | undefined,
       });
 
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.message || `API error: ${response.status}`);
+      // Send tx via wallet
+      const txHash = await new Promise<string>((resolve, reject) => {
+        if (!window.ethereum || !wallet.address) {
+          reject(new Error('Wallet not connected'));
+          return;
+        }
+        window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from: wallet.address,
+            to: FACTORY_ADDRESS,
+            data: txData,
+          }],
+        }).then(hash => resolve(hash as string)).catch(reject);
+      });
+
+      setCreateStep('confirming');
+
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash as `0x${string}`,
+      });
+
+      if (receipt.status === 'reverted') {
+        throw new Error('Transaction reverted on chain');
       }
 
-      const data = await response.json();
-      
-      setCreatedEscrow({
-        escrow: data.escrow,
-        code: data.code,
-        token: data.token,
-        confirmDeadline: data.confirmDeadline,
+      const logs = parseEventLogs({
+        abi: EscrowFactoryABI,
+        logs: receipt.logs,
+        eventName: 'EscrowCreated',
       });
 
-    } catch (err) {
+      if (logs.length === 0) {
+        throw new Error('EscrowCreated event not found in receipt');
+      }
+
+      const event = logs[0].args;
+      const escrowAddress = event.escrow as string;
+      const tokenAddress = event.token as string;
+      const confirmDeadline = Number(event.confirmDeadline);
+
+      // Register with oracle to get lookup code
+      setCreateStep('registering');
+
+      const registerResp = await fetch('/api/escrow/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash }),
+      });
+
+      let code = '';
+      if (registerResp.ok) {
+        const regData = await registerResp.json();
+        code = regData.code || '';
+      } else {
+        console.warn('Register failed, escrow created on-chain but not indexed yet');
+      }
+
+      setCreatedEscrow({
+        escrow: escrowAddress,
+        code,
+        token: tokenAddress,
+        confirmDeadline,
+        txHash,
+      });
+
+    } catch (err: unknown) {
       console.error('Create escrow error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to create escrow');
+      const errObj = err as { code?: number; message?: string };
+      if (errObj.code === 4001) {
+        setError('Transaction rejected by user');
+      } else {
+        setError(errObj.message || 'Failed to create escrow');
+      }
     } finally {
       setIsLoading(false);
+      setCreateStep('form');
     }
   };
 
@@ -381,22 +451,23 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
 
   // Show success state with escrow address
   if (createdEscrow) {
-    const confirmShareUrl = buildShareUrl(createdEscrow.code, {
+    const hasCode = !!createdEscrow.code;
+    const confirmShareUrl = hasCode ? buildShareUrl(createdEscrow.code, {
       action: 'confirm',
       role: 'seller',
-    });
-    const confirmWalletUrls = buildWalletShareUrls(createdEscrow.code, {
+    }) : '';
+    const confirmWalletUrls = hasCode ? buildWalletShareUrls(createdEscrow.code, {
       action: 'confirm',
       role: 'seller',
-    });
-    const fundShareUrl = buildShareUrl(createdEscrow.code, {
+    }) : { metamask: '', coinbase: '' };
+    const fundShareUrl = hasCode ? buildShareUrl(createdEscrow.code, {
       action: 'fund',
       role: 'buyer',
-    });
-    const fundWalletUrls = buildWalletShareUrls(createdEscrow.code, {
+    }) : '';
+    const fundWalletUrls = hasCode ? buildWalletShareUrls(createdEscrow.code, {
       action: 'fund',
       role: 'buyer',
-    });
+    }) : { metamask: '', coinbase: '' };
 
     return (
       <motion.div
@@ -438,12 +509,22 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
           </div>
 
           {/* Code */}
-          <div className="bg-white/10 rounded-lg p-3 mb-3">
-            <label className="block text-xs font-semibold text-white/70 mb-1.5">
-              Lookup Code
-            </label>
-            <code className="text-sm font-mono text-white">{createdEscrow.code}</code>
-          </div>
+          {hasCode && (
+            <div className="bg-white/10 rounded-lg p-3 mb-3">
+              <label className="block text-xs font-semibold text-white/70 mb-1.5">
+                Lookup Code
+              </label>
+              <code className="text-sm font-mono text-white">{createdEscrow.code}</code>
+            </div>
+          )}
+
+          {!hasCode && (
+            <div className="bg-yellow-500/10 rounded-lg p-3 mb-3 border border-yellow-500/30">
+              <p className="text-xs text-yellow-300">
+                Escrow created on-chain but registration is pending. The watcher will index it shortly.
+              </p>
+            </div>
+          )}
 
           {/* Plain-English next steps */}
           <div className="bg-[#0BB89A]/10 rounded-lg p-3 mb-4 border border-[#0BB89A]/30">
@@ -456,7 +537,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             </ol>
           </div>
 
-          <div className="grid grid-cols-1 gap-2 mb-3">
+          {hasCode && <div className="grid grid-cols-1 gap-2 mb-3">
             <p className="text-[11px] text-white/65">
               Seller action: this link is for the seller to confirm.
             </p>
@@ -479,7 +560,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
               triggerLabel="Share buyer funding link"
               triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
             />
-          </div>
+          </div>}
 
           {/* View on Arbiscan */}
           <a
@@ -808,25 +889,46 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             )}
           </div>
 
-          {/* Submit Button */}
-          <button
-            type="submit"
-            disabled={!isFormValid || isLoading}
-            className={`w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white active:scale-[0.99] transition-all ${
-              isFormValid && !isLoading
-                ? 'bg-[#0BB89A] hover:bg-[#0BB89A]/90 shadow-lg hover:shadow-xl hover:shadow-[#0BB89A]/20 backdrop-blur-sm'
-                : 'bg-gray-400/50 cursor-not-allowed backdrop-blur-sm'
-            }`}
-          >
-            {isLoading ? (
-              <span className="flex items-center justify-center gap-2">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Creating...
-              </span>
-            ) : (
-              'Create Escrow'
-            )}
-          </button>
+          {/* Submit / Wallet Button */}
+          {!wallet.address ? (
+            <button
+              type="button"
+              onClick={() => wallet.connect()}
+              className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-[#0BB89A] hover:bg-[#0BB89A]/90 shadow-lg hover:shadow-xl hover:shadow-[#0BB89A]/20 backdrop-blur-sm active:scale-[0.99] transition-all flex items-center justify-center gap-2"
+            >
+              <Wallet className="w-4 h-4" />
+              Connect Wallet to Create
+            </button>
+          ) : wallet.chainId !== 42161 ? (
+            <button
+              type="button"
+              onClick={() => wallet.switchChain()}
+              className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-yellow-500 hover:bg-yellow-400 active:scale-[0.99] transition-all"
+            >
+              Switch to Arbitrum
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!isFormValid || isLoading}
+              className={`w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white active:scale-[0.99] transition-all ${
+                isFormValid && !isLoading
+                  ? 'bg-[#0BB89A] hover:bg-[#0BB89A]/90 shadow-lg hover:shadow-xl hover:shadow-[#0BB89A]/20 backdrop-blur-sm'
+                  : 'bg-gray-400/50 cursor-not-allowed backdrop-blur-sm'
+              }`}
+            >
+              {isLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  {createStep === 'signing' && 'Sign in wallet...'}
+                  {createStep === 'confirming' && 'Confirming on chain...'}
+                  {createStep === 'registering' && 'Registering escrow...'}
+                </span>
+              ) : (
+                'Create Escrow'
+              )}
+            </button>
+          )}
         </form>
 
         {/* Info - lower contrast on mobile */}

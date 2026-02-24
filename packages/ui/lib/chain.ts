@@ -40,6 +40,45 @@ export const publicClient = createPublicClient({
 // Contract ABIs (minimal for reads)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+export const EscrowFactoryABI = [
+  {
+    inputs: [
+      { name: '_payout', type: 'address' },
+      { name: '_funder', type: 'address' },
+      { name: '_token', type: 'address' },
+      { name: '_targetAmount', type: 'uint256' },
+      { name: '_deadline', type: 'uint64' },
+      { name: '_arbitrator1', type: 'address' },
+      { name: '_arbitrator2', type: 'address' },
+      { name: '_arbitrator3', type: 'address' },
+    ],
+    name: 'createEscrowSimple',
+    outputs: [{ name: 'escrow', type: 'address' }],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: 'escrow', type: 'address' },
+      { indexed: true, name: 'funder', type: 'address' },
+      { indexed: true, name: 'payout', type: 'address' },
+      { indexed: false, name: 'token', type: 'address' },
+      { indexed: false, name: 'targetAmount', type: 'uint256' },
+      { indexed: false, name: 'bondCap', type: 'uint256' },
+      { indexed: false, name: 'deadline', type: 'uint64' },
+      { indexed: false, name: 'createdAt', type: 'uint64' },
+      { indexed: false, name: 'confirmDeadline', type: 'uint64' },
+      { indexed: false, name: 'arbWindowEnd', type: 'uint64' },
+      { indexed: false, name: 'arbitrator1', type: 'address' },
+      { indexed: false, name: 'arbitrator2', type: 'address' },
+      { indexed: false, name: 'arbitrator3', type: 'address' },
+    ],
+    name: 'EscrowCreated',
+    type: 'event',
+  },
+] as const;
+
 export const EscrowABI = [
   // Immutable getters
   { inputs: [], name: 'payout', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },

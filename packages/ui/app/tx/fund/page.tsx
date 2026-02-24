@@ -160,8 +160,8 @@ function FundPageContent() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div className="rounded-lg bg-white/10 p-3">
-              <p className="text-white/50 text-xs mb-1">Escrow Address</p>
-              <p className="font-mono text-white/85">{shortenAddress(escrow.escrow)}</p>
+              <p className="text-white/50 text-xs mb-1">{codeParam ? 'Lookup Code' : 'Escrow Address'}</p>
+              <p className="font-mono text-white/85">{codeParam || shortenAddress(escrow.escrow)}</p>
             </div>
             <div className="rounded-lg bg-white/10 p-3">
               <p className="text-white/50 text-xs mb-1">You will send</p>
@@ -180,7 +180,7 @@ function FundPageContent() {
           <ul className="space-y-2 text-sm text-white/60">
             <li className="flex items-start gap-2">
               <span className="text-[#0BB89A] font-bold">1.</span>
-              <span>Funds are transferred on-chain to the escrow address.</span>
+              <span>Funds are transferred on-chain to the escrow contract.</span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-[#0BB89A] font-bold">2.</span>
@@ -205,7 +205,7 @@ function FundPageContent() {
           <div className="flex items-start gap-2">
             <ArrowRight className="w-4 h-4 mt-0.5 text-[#0BB89A]" />
             <p className="text-xs text-white/60">
-              Double check the escrow address and token amount before signing.
+              Verify the lookup code and token amount match what you expect before signing.
             </p>
           </div>
         </div>

@@ -86,3 +86,9 @@ export interface EscrowListResponse {
 }
 
 export type CreateEscrowRequest = z.infer<typeof CreateEscrowSchema>;
+
+export const RegisterEscrowSchema = z.object({
+  txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, "Invalid transaction hash"),
+});
+
+export type RegisterEscrowRequest = z.infer<typeof RegisterEscrowSchema>;

@@ -13,6 +13,7 @@ import { EscrowFactoryABI, EscrowABI, ERC20ABI } from "../contracts/abis.js";
 import { getNetwork } from "../config/networks.js";
 import { ENV } from "../config/env.js";
 import { sql, hexToBuffer, bufferToHex } from "../db/client.js";
+import { upsertEscrowFromEvent } from "../services/escrow.js";
 import { getEscrowQueue, createEscrowWorker } from "./queue.js";
 import { processEscrowJob } from "./processor.js";
 import { Worker } from "bullmq";
@@ -110,13 +111,40 @@ async function markProcessed(txHash: string, escrow: string, eventType: string) 
 }
 
 /**
- * Process EscrowFactory.EscrowCreated event
+ * Process EscrowFactory.EscrowCreated event.
+ * Activates the escrow worker AND persists it in the DB if not already indexed
+ * (safety net for escrows created outside the UI register flow).
  */
 async function handleEscrowCreated(log: any) {
-  const escrowAddress = log.args.escrow.toLowerCase();
+  const escrowAddress = (log.args.escrow as string).toLowerCase();
   
   console.log(`🆕 EscrowCreated: ${escrowAddress}`);
-  
+
+  // Persist if missing (idempotent upsert)
+  try {
+    const event = log.args;
+    const { code, isNew } = await upsertEscrowFromEvent({
+      escrowAddress,
+      payout: event.payout as string,
+      funder: event.funder as string,
+      tokenAddress: event.token as string,
+      targetAmount: event.targetAmount.toString(),
+      deadline: Number(event.deadline),
+      confirmDeadline: Number(event.confirmDeadline),
+      arbWindowEnd: Number(event.arbWindowEnd),
+      arbitrator1: event.arbitrator1 as string,
+      arbitrator2: event.arbitrator2 as string,
+      arbitrator3: event.arbitrator3 as string,
+      txHash: log.transactionHash,
+      createdBlock: log.blockNumber.toString(),
+    });
+    if (isNew) {
+      console.log(`📋 Watcher indexed new escrow: ${escrowAddress} (code: ${code})`);
+    }
+  } catch (err) {
+    console.error(`⚠️ Failed to upsert escrow ${escrowAddress} from watcher:`, err);
+  }
+
   addActiveEscrow(escrowAddress);
 }
 

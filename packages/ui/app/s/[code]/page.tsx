@@ -186,7 +186,7 @@ export default async function ShareLandingPage({ params, searchParams }: SharePa
 
           <div className="mt-4 flex items-start gap-2 text-xs text-white/50">
             <ShieldCheck className="w-4 h-4 mt-0.5 text-[#0BB89A]" />
-            Always verify escrow address, buyer/seller wallets, and token amount before signing.
+            Always verify the lookup code, buyer/seller wallets, and token amount before signing.
           </div>
         </div>
       </div>
