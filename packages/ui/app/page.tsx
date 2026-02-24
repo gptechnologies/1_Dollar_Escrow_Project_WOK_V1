@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import Image from 'next/image';
 import CreateEscrowCard from '@/components/CreateEscrowCard';
 import EscrowDashboard from '@/components/EscrowDashboard';
@@ -17,6 +17,41 @@ type HomePrefill = {
   deadlineDate?: string;
   deadlineTime?: string;
 };
+
+const TAGLINES = ['No Bank', 'No Middleman', 'Instant Settlement', 'All you need is a wallet'];
+
+function CenterHero() {
+  const [visible, setVisible] = useState<number[]>([]);
+
+  useEffect(() => {
+    const timers = TAGLINES.map((_, i) =>
+      setTimeout(() => setVisible((prev) => [...prev, i]), 600 + i * 500)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center text-center py-8 min-w-0">
+      <Image src="/Crow Logo Isolated Black.png" alt="Crow" width={80} height={80} />
+      <h1 className="text-4xl font-bold text-white mt-3">Crow</h1>
+      <p className="text-sm text-white/60 mt-1">Instant P2P payments</p>
+      <div className="mt-6 space-y-2">
+        {TAGLINES.map((line, i) => (
+          <p
+            key={line}
+            className="text-lg font-medium text-[#0BB89A] transition-all duration-700"
+            style={{
+              opacity: visible.includes(i) ? 1 : 0,
+              transform: visible.includes(i) ? 'translateY(0)' : 'translateY(8px)',
+            }}
+          >
+            {line}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function HomeContent({
   prefillCreate,
@@ -35,57 +70,49 @@ function HomeContent({
         {/* ==================== SECTION 1: Hero ==================== */}
         <section className="relative">
           <div className="relative z-30">
-            
-            {/* Header - Mobile: simplified 3-line hero, Desktop: original layout */}
-            <div className="max-w-7xl mx-auto px-4 pt-[calc(env(safe-area-inset-top)+1.5rem)] md:pt-6">
-              {/* Mobile Hero (< md) */}
-              <div className="md:hidden flex flex-col items-center text-center gap-2 pb-4">
+
+            {/* Mobile Hero (< lg) */}
+            <div className="lg:hidden">
+              <div className="flex flex-col items-center text-center gap-2 pt-[calc(env(safe-area-inset-top)+1.5rem)] pb-4 px-4">
                 <p className="text-xs text-white/60">No sign up required</p>
                 <div className="flex items-center gap-2">
-                  <Image src="/Crow Logo Isolated Black.png" alt="Crow" width={28} height={28} />
+                  <Image src="/Crow Logo Isolated Black.png" alt="Crow" width={40} height={40} />
                   <h1 className="text-3xl font-bold text-white">Crow</h1>
                 </div>
-                <p className="text-sm text-white/70">
-                  Instant escrow for <span className="text-[#0BB89A]">USDC/USDT</span> on Arbitrum
-                </p>
+                <p className="text-sm text-white/70">Instant P2P payments</p>
               </div>
-
-              {/* Desktop Hero (>= md) */}
-              <div className="hidden md:flex justify-between items-center">
-                <div className="relative flex items-center gap-2.5">
-                  <Image src="/Crow Logo Isolated Black.png" alt="Crow" width={30} height={30} />
-                  <div className="relative">
-                    <span className="text-2xl font-bold text-white">Crow</span>
-                    <span className="absolute left-0 top-full text-xs text-white/60 whitespace-nowrap">The simplest P2P escrow service</span>
-                  </div>
+              <div className="pt-2 px-4 max-w-7xl mx-auto">
+                <div className="flex-shrink-0 mx-auto">
+                  <CreateEscrowCard initialValues={prefillCreate} />
                 </div>
-                <p className="text-sm md:text-base font-medium text-white/80 text-center flex-1">
-                  No sign up required. <span className="text-[#0BB89A]">*Supports USDC or USDT on the ARBITRUM network*</span>
-                </p>
               </div>
             </div>
 
-            {/* Main Content Area */}
-            <div className="pt-4 md:pt-8 px-4 max-w-7xl mx-auto">
-              <div className="flex flex-col lg:flex-row lg:justify-between lg:items-stretch gap-8">
-                
-                {/* LEFT: Existing Card (Margins preserved) */}
-                <div className="flex-shrink-0 mx-auto md:mx-0">
+            {/* Desktop Layout (>= lg): 3-column */}
+            <div className="hidden lg:block pt-6 px-4 max-w-7xl mx-auto">
+              <p className="text-sm font-medium text-white/80 text-center mb-6">
+                No sign up required. <span className="text-[#0BB89A]">Supports USDC or USDT on the ARBITRUM network</span>
+              </p>
+              <div className="flex items-start justify-between gap-6">
+
+                {/* LEFT: Create Escrow */}
+                <div className="flex-shrink-0">
                   <CreateEscrowCard initialValues={prefillCreate} />
                 </div>
 
-                {/* RIGHT: Accept Payment card - hidden on mobile, shown on desktop */}
-                <div className="hidden lg:flex flex-1 max-w-2xl flex-col">
-                  <div className="ml-auto flex flex-col items-center gap-3">
-                    <AcceptPaymentCard />
-                    <a
-                      href="#how-it-works"
-                      className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-colors"
-                    >
-                      How it works
-                      <ChevronDown className="w-4 h-4 animate-bounce" />
-                    </a>
-                  </div>
+                {/* CENTER: Brand Hero */}
+                <CenterHero />
+
+                {/* RIGHT: Accept Payment */}
+                <div className="flex-shrink-0 flex flex-col items-center gap-3">
+                  <AcceptPaymentCard />
+                  <a
+                    href="#how-it-works"
+                    className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-colors"
+                  >
+                    How it works
+                    <ChevronDown className="w-4 h-4 animate-bounce" />
+                  </a>
                 </div>
               </div>
             </div>

@@ -275,6 +275,9 @@ export default function AcceptPaymentCard() {
 
       <div className="mt-3 px-1 space-y-1">
         <p className="text-[11px] text-white/40 leading-relaxed">
+          <span className="text-white/60 font-medium">Fees:</span> None
+        </p>
+        <p className="text-[11px] text-white/40 leading-relaxed">
           <span className="text-white/60 font-medium">Tip:</span> Use it as a price tag, embed it on your site, or send the link directly. It works like a digital invoice.
         </p>
       </div>

@@ -56,6 +56,19 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Hide number input spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  margin: 0 !important;
+  display: none !important;
+}
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}
+
 /* Ensure the canvas doesn't interfere with pointer events on overlaid elements */
 canvas {
   outline: none;
