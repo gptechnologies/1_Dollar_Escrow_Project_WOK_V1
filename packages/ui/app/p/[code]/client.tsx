@@ -12,7 +12,12 @@ import {
   ERC20ABI,
 } from '@/lib/chain';
 import { buildPaymentUrl } from '@/lib/payment';
-import { useWalletConnection } from '@/lib/wallet';
+import {
+  useWalletConnection,
+  buildMetaMaskDeepLink,
+  buildCoinbaseWalletDeepLink,
+  getCurrentUrl,
+} from '@/lib/wallet';
 import { encodeFunctionData, keccak256, toHex, toBytes, type Address } from 'viem';
 import { publicClient } from '@/lib/chain';
 
@@ -281,7 +286,9 @@ export default function PaymentPageClient({
           <div className="space-y-2.5">
             {error && <p className="text-red-400 text-xs text-center">{error}</p>}
 
-            {!wallet.address ? (
+            {!wallet.address && !wallet.hasInjectedWallet ? (
+              <WalletDeepLinks />
+            ) : !wallet.address ? (
               <button
                 onClick={handleConnect}
                 className="w-full bg-[#0BB89A] hover:bg-[#0BB89A]/90 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
@@ -344,5 +351,55 @@ export default function PaymentPageClient({
         )}
       </div>
     </main>
+  );
+}
+
+function WalletDeepLinks() {
+  const currentUrl = typeof window !== 'undefined' ? getCurrentUrl() : '';
+
+  return (
+    <div className="space-y-2.5">
+      <p className="text-xs text-white/50 text-center mb-1">Open in your wallet to pay</p>
+      <a
+        href={buildMetaMaskDeepLink(currentUrl)}
+        className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl bg-[#F6851B]/10 border border-[#F6851B]/30 text-white font-medium hover:bg-[#F6851B]/20 active:scale-[0.99] transition-all"
+      >
+        <MetaMaskIcon />
+        Open in MetaMask
+        <ExternalLink className="w-4 h-4 ml-auto opacity-50" />
+      </a>
+      <a
+        href={buildCoinbaseWalletDeepLink(currentUrl)}
+        className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl bg-[#0052FF]/10 border border-[#0052FF]/30 text-white font-medium hover:bg-[#0052FF]/20 active:scale-[0.99] transition-all"
+      >
+        <CoinbaseWalletIcon />
+        Open in Coinbase Wallet
+        <ExternalLink className="w-4 h-4 ml-auto opacity-50" />
+      </a>
+    </div>
+  );
+}
+
+function MetaMaskIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+      <path d="M21.65 2L13.35 8.29L14.88 4.61L21.65 2Z" fill="#E17726"/>
+      <path d="M2.35 2L10.57 8.35L9.12 4.61L2.35 2Z" fill="#E27625"/>
+      <path d="M18.68 16.71L16.56 20.06L21.19 21.36L22.55 16.79L18.68 16.71Z" fill="#E27625"/>
+      <path d="M1.46 16.79L2.81 21.36L7.44 20.06L5.32 16.71L1.46 16.79Z" fill="#E27625"/>
+      <path d="M7.2 10.54L5.84 12.61L10.44 12.84L10.27 7.87L7.2 10.54Z" fill="#E27625"/>
+      <path d="M16.8 10.54L13.68 7.81L13.56 12.84L18.16 12.61L16.8 10.54Z" fill="#E27625"/>
+      <path d="M7.44 20.06L10.16 18.73L7.83 16.82L7.44 20.06Z" fill="#E27625"/>
+      <path d="M13.84 18.73L16.56 20.06L16.17 16.82L13.84 18.73Z" fill="#E27625"/>
+    </svg>
+  );
+}
+
+function CoinbaseWalletIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+      <rect width="24" height="24" rx="6" fill="#0052FF"/>
+      <path d="M12 4C7.58 4 4 7.58 4 12C4 16.42 7.58 20 12 20C16.42 20 20 16.42 20 12C20 7.58 16.42 4 12 4ZM14.5 14.5H9.5V9.5H14.5V14.5Z" fill="white"/>
+    </svg>
   );
 }
