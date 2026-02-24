@@ -67,7 +67,7 @@ export default function PaymentPageClient({
   const [step, setStep] = useState<PayStep>('idle');
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [allowance, setAllowance] = useState<bigint>(0n);
+  const [allowance, setAllowance] = useState<bigint>(BigInt(0));
 
   const linkId = link.linkId || deriveLinkId(link.code);
   const requiredAmount = BigInt(link.amount);
@@ -86,7 +86,7 @@ export default function PaymentPageClient({
       });
       setAllowance(result as bigint);
     } catch {
-      setAllowance(0n);
+      setAllowance(BigInt(0));
     }
   }, [wallet.address, link.token, useRouter]);
 
