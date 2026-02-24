@@ -196,15 +196,43 @@ function HomeContent({
                   ),
                 },
                 {
-                  id: 'roadmap',
-                  title: 'Roadmap',
+                  id: 'agents-md',
+                  title: 'Agents.MD',
                   content: (
                     <>
-                      <p className="mb-2">We have two goals:</p>
-                      <ol className="space-y-2 list-decimal list-inside mb-4">
-                        <li>Our first goal is to find out what our users like, and expand on that.</li>
-                        <li>Our last goal is to find out what our users do not like, and remove as much of that as possible.</li>
-                      </ol>
+                      <p className="mb-4">
+                        A programmatic reference for AI agents and developers to interact with the Crow escrow contracts on Arbitrum without the web UI.
+                      </p>
+
+                      <h4 className="text-white font-semibold mb-2">Addresses (Arbitrum One, Chain ID 42161)</h4>
+                      <ul className="space-y-1 text-sm font-mono mb-4">
+                        <li><span className="text-white/50">Factory:</span> <span className="text-white/80">0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9</span></li>
+                        <li><span className="text-white/50">USDC:</span> <span className="text-white/80">0xaf88d065e77c8cC2239327C5EDb3A432268e5831</span></li>
+                        <li><span className="text-white/50">USDT:</span> <span className="text-white/80">0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9</span></li>
+                      </ul>
+
+                      <h4 className="text-white font-semibold mb-2">What You Can Do</h4>
+                      <ul className="space-y-1 text-sm list-disc list-inside mb-4">
+                        <li><strong className="text-white">Create escrow</strong> &mdash; call <code className="text-[#0BB89A]">createEscrowSimple()</code> on the factory (permissionless)</li>
+                        <li><strong className="text-white">Confirm</strong> &mdash; seller calls <code className="text-[#0BB89A]">confirm()</code> within 24h</li>
+                        <li><strong className="text-white">Fund</strong> &mdash; buyer sends ERC-20 <code className="text-[#0BB89A]">transfer()</code> to the escrow address</li>
+                        <li><strong className="text-white">Finalize</strong> &mdash; anyone calls <code className="text-[#0BB89A]">finalizeAfterDeadline()</code> after the deadline</li>
+                        <li><strong className="text-white">Arbitrate</strong> &mdash; arbitrators call <code className="text-[#0BB89A]">arbitratorRelease()</code> or <code className="text-[#0BB89A]">arbitratorRefund()</code></li>
+                        <li><strong className="text-white">Mutual actions</strong> &mdash; both parties can agree to early release, refund, deadline extension, or arbitrator swap</li>
+                        <li><strong className="text-white">Accept payments</strong> &mdash; create QR-based payment links via the <code className="text-[#0BB89A]">POST /payment/create</code> API</li>
+                      </ul>
+
+                      <p className="mb-2">Full reference with ABIs, code examples, lifecycle diagrams, and API endpoints:</p>
+                      <p>
+                        <a
+                          href="https://github.com/gptechnologies/1_Dollar_Escrow_Project_WOK_V1/blob/v2/AGENTS.md"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#0BB89A] hover:text-[#0BB89A]/80 underline transition-colors"
+                        >
+                          View AGENTS.md on GitHub
+                        </a>
+                      </p>
                     </>
                   ),
                 },
