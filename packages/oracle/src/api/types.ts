@@ -87,6 +87,24 @@ export interface EscrowListResponse {
 
 export type CreateEscrowRequest = z.infer<typeof CreateEscrowSchema>;
 
+export const CreatePaymentLinkSchema = z.object({
+  wallet: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid wallet address"),
+  token: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address"),
+  amount: z.string().regex(/^\d+$/, "Must be a valid integer string (raw token units)"),
+  description: z.string().max(120, "Description must be 120 characters or less").optional(),
+});
+
+export type CreatePaymentLinkRequest = z.infer<typeof CreatePaymentLinkSchema>;
+
+export interface PaymentLinkResponse {
+  code: string;
+  wallet: string;
+  token: string;
+  amount: string;
+  description: string | null;
+  createdAt: string;
+}
+
 export const RegisterEscrowSchema = z.object({
   txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, "Invalid transaction hash"),
 });

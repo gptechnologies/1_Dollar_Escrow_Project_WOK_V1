@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import { Suspense } from 'react';
 import CreateEscrowCard from '@/components/CreateEscrowCard';
 import EscrowDashboard from '@/components/EscrowDashboard';
+import AcceptPaymentCard from '@/components/AcceptPaymentCard';
 import InfoAccordion from '@/components/InfoAccordion';
 import { useSearchParams } from 'next/navigation';
 
@@ -73,8 +74,8 @@ function HomeContent({
                   <CreateEscrowCard initialValues={prefillCreate} />
                 </div>
 
-                {/* RIGHT: How It Works panel - hidden on mobile, shown on desktop */}
-                <div className="hidden lg:flex flex-1 max-w-2xl flex-col justify-between">
+                {/* RIGHT: How It Works + Accept Payment - hidden on mobile, shown on desktop */}
+                <div className="hidden lg:flex flex-1 max-w-2xl flex-col gap-6">
                   
                   {/* Top Info Box - right-aligned on desktop */}
                   <div className="surface-card p-5 w-[320px] ml-auto">
@@ -96,6 +97,11 @@ function HomeContent({
                     <p className="mt-3 text-sm text-white/70">Optional: Add an arbitrator for disputes.</p>
                   </div>
 
+                  {/* Accept Payment Card - right-aligned below How it works */}
+                  <div className="ml-auto">
+                    <AcceptPaymentCard />
+                  </div>
+
                 </div>
               </div>
             </div>
@@ -107,6 +113,11 @@ function HomeContent({
           <div className="max-w-6xl mx-auto">
             <EscrowDashboard initialQuery={prefillLookup} />
           </div>
+        </section>
+
+        {/* ==================== SECTION 2.5: Accept Payment (mobile only) ==================== */}
+        <section className="lg:hidden px-4 pb-8 md:pb-12 flex justify-center">
+          <AcceptPaymentCard />
         </section>
 
         {/* ==================== SECTION 3: Information Accordion ==================== */}

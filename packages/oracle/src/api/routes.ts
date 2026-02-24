@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { requireAuth, validateBody } from "./middleware.js";
-import { CreateEscrowSchema, RegisterEscrowSchema } from "./types.js";
+import { CreateEscrowSchema, RegisterEscrowSchema, CreatePaymentLinkSchema } from "./types.js";
 import { createEscrow, registerEscrow, getEscrowStatus, listEscrows } from "../services/escrow.js";
+import { createPaymentLink, getPaymentLink } from "../services/payment.js";
 import { addActiveEscrow } from "../watcher/events.js";
 
 const router = Router();
@@ -85,6 +86,32 @@ router.get("/escrow/list", async (req, res, next) => {
     });
 
     res.json({ escrows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /payment/create
+ * Create a payment link (public, no auth)
+ */
+router.post("/payment/create", validateBody(CreatePaymentLinkSchema), async (req, res, next) => {
+  try {
+    const result = await createPaymentLink(req.body);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /payment/:code
+ * Get payment link details by code (public)
+ */
+router.get("/payment/:code", async (req, res, next) => {
+  try {
+    const link = await getPaymentLink(req.params.code);
+    res.json(link);
   } catch (error) {
     next(error);
   }

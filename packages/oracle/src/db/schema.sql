@@ -122,6 +122,18 @@ BEGIN
   END IF;
 END $$;
 
+-- Payment links for QR-based stablecoin payments
+CREATE TABLE IF NOT EXISTS payment_links (
+  id SERIAL PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  wallet BYTEA NOT NULL,
+  token BYTEA NOT NULL,
+  amount TEXT NOT NULL,
+  description TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_payment_links_code ON payment_links(code);
+
 -- Migration: Change processed_tx primary key from tx_hash to (tx_hash, escrow)
 -- This fixes multi-log transaction handling and improves reorg safety
 DO $$
