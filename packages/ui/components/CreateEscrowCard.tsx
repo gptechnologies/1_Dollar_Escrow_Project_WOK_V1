@@ -609,7 +609,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
 
           {/* Create Another */}
           <button
-            onClick={resetForm}
+            onClick={() => resetForm()}
             className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-[#0BB89A] hover:bg-[#0BB89A]/90 active:scale-[0.99] transition-all mt-3"
           >
             {mode === 'wager' ? 'Create Another Wager' : 'Create Another Escrow'}
