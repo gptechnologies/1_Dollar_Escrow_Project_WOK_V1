@@ -43,8 +43,11 @@ type CreateEscrowCardProps = {
 
 type CreateStep = 'form' | 'signing' | 'confirming' | 'registering';
 
+type CardMode = 'escrow' | 'wager';
+
 export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProps) {
   const wallet = useWalletConnection();
+  const [mode, setMode] = useState<CardMode>('escrow');
   const [amount, setAmount] = useState('');
   const [selectedToken, setSelectedToken] = useState('USDC');
   const [fundingAddress, setFundingAddress] = useState('');
@@ -168,8 +171,12 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
       isValid = false;
     }
 
+    const isWager = mode === 'wager';
+    const partyALabel = isWager ? 'Party A' : 'Buyer';
+    const partyBLabel = isWager ? 'Party B' : 'Seller';
+
     if (!fundingAddress) {
-      newErrors.fundingAddress = 'Buyer address is required';
+      newErrors.fundingAddress = `${partyALabel} address is required`;
       isValid = false;
     } else if (!isValidEthAddress(fundingAddress)) {
       newErrors.fundingAddress = 'Invalid Ethereum address format';
@@ -177,7 +184,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     }
 
     if (!counterparty) {
-      newErrors.counterparty = 'Seller address is required';
+      newErrors.counterparty = `${partyBLabel} address is required`;
       isValid = false;
     } else if (!isValidEthAddress(counterparty)) {
       newErrors.counterparty = 'Invalid Ethereum address format';
@@ -185,7 +192,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     }
 
     if (fundingAddress && counterparty && fundingAddress.toLowerCase() === counterparty.toLowerCase()) {
-      newErrors.counterparty = 'Buyer and seller must be different';
+      newErrors.counterparty = `${partyALabel} and ${partyBLabel} must be different`;
       isValid = false;
     }
 
@@ -193,10 +200,14 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     const arb2 = arbitrator2.trim();
     const arb3 = arbitrator3.trim();
 
-    // Enforce 0/1/3 rule: either none, only arb1, or all three
     const hasArb1 = !!arb1;
     const hasArb2 = !!arb2;
     const hasArb3 = !!arb3;
+
+    if (isWager && !hasArb1) {
+      newErrors.arbitrator1 = 'A judge is required for wagers';
+      isValid = false;
+    }
 
     if (hasArb2 || hasArb3) {
       if (!hasArb1 || !hasArb2 || !hasArb3) {
@@ -215,7 +226,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
         arb1.toLowerCase() === fundingAddress.toLowerCase() ||
         arb1.toLowerCase() === counterparty.toLowerCase()
       ) {
-        newErrors.arbitrator1 = 'Arbitrator must be different from buyer and seller';
+        newErrors.arbitrator1 = `${isWager ? 'Judge' : 'Arbitrator'} must be different from ${partyALabel} and ${partyBLabel}`;
         isValid = false;
       }
     }
@@ -231,7 +242,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
         arb2.toLowerCase() === fundingAddress.toLowerCase() ||
         arb2.toLowerCase() === counterparty.toLowerCase()
       ) {
-        newErrors.arbitrator2 = 'Arbitrator must be different from buyer and seller';
+        newErrors.arbitrator2 = `Arbitrator must be different from ${partyALabel} and ${partyBLabel}`;
         isValid = false;
       }
     }
@@ -247,7 +258,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
         arb3.toLowerCase() === fundingAddress.toLowerCase() ||
         arb3.toLowerCase() === counterparty.toLowerCase()
       ) {
-        newErrors.arbitrator3 = 'Arbitrator must be different from buyer and seller';
+        newErrors.arbitrator3 = `Arbitrator must be different from ${partyALabel} and ${partyBLabel}`;
         isValid = false;
       }
     }
@@ -288,7 +299,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
       try {
         await wallet.connect();
       } catch {
-        setError('Please connect your wallet to create an escrow');
+        setError(`Please connect your wallet to create ${mode === 'wager' ? 'a wager' : 'an escrow'}`);
         return;
       }
       return;
@@ -305,7 +316,8 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
         throw new Error('Token address not configured');
       }
 
-      const amountInUnits = BigInt(Math.floor(parseFloat(amount) * 1_000_000));
+      const baseAmount = BigInt(Math.floor(parseFloat(amount) * 1_000_000));
+      const amountInUnits = mode === 'wager' ? baseAmount * BigInt(2) : baseAmount;
       
       const parsedDate = parseDeadlineDate(deadlineDate);
       if (!parsedDate) {
@@ -419,7 +431,8 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     }
   };
 
-  const resetForm = () => {
+  const resetForm = (forMode?: CardMode) => {
+    const targetMode = forMode ?? mode;
     setCreatedEscrow(null);
     setAmount('');
     setSelectedToken('USDC');
@@ -428,7 +441,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     setArbitrator1('');
     setArbitrator2('');
     setArbitrator3('');
-    setShowAdvanced(false);
+    setShowAdvanced(targetMode === 'wager');
     setShowAdvancedArbitrationInfo(false);
     setDeadlineDate('');
     setDeadlineTime('23:59');
@@ -447,7 +460,14 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     setError('');
   };
 
-  const isFormValid = amount && fundingAddress && counterparty && deadlineDate && deadlineTime && parseFloat(amount) > 0;
+  const handleModeSwitch = (newMode: CardMode) => {
+    if (newMode === mode) return;
+    setMode(newMode);
+    resetForm(newMode);
+  };
+
+  const isFormValid = amount && fundingAddress && counterparty && deadlineDate && deadlineTime && parseFloat(amount) > 0
+    && (mode === 'escrow' || arbitrator1.trim());
 
   // Show success state with escrow address
   if (createdEscrow) {
@@ -481,8 +501,14 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             <div className="w-12 h-12 bg-[#0BB89A]/20 rounded-full flex items-center justify-center mx-auto mb-3">
               <Check className="w-6 h-6 text-[#0BB89A]" />
             </div>
-            <h2 className="text-lg font-bold text-white">Escrow Created!</h2>
-            <p className="text-xs text-white/70 mt-1">You are done with setup. Now the seller must confirm.</p>
+            <h2 className="text-lg font-bold text-white">
+              {mode === 'wager' ? 'Wager Created!' : 'Escrow Created!'}
+            </h2>
+            <p className="text-xs text-white/70 mt-1">
+              {mode === 'wager'
+                ? 'You are done with setup. Now Party B must confirm.'
+                : 'You are done with setup. Now the seller must confirm.'}
+            </p>
           </div>
 
           {/* Escrow Address */}
@@ -529,35 +555,44 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
           {/* Plain-English next steps */}
           <div className="bg-[#0BB89A]/10 rounded-lg p-3 mb-4 border border-[#0BB89A]/30">
             <h3 className="text-xs font-semibold text-[#0BB89A] mb-2">What should happen next</h3>
-            <ol className="text-xs text-white/80 space-y-1.5">
-              <li><span className="text-[#0BB89A] font-bold">1.</span> Share the seller confirm link below.</li>
-              <li><span className="text-[#0BB89A] font-bold">2.</span> Seller confirms escrow participation.</li>
-              <li><span className="text-[#0BB89A] font-bold">3.</span> Buyer funds {amount} {selectedToken}.</li>
-              <li><span className="text-[#0BB89A] font-bold">4.</span> After deadline, escrow can be finalized and funds are released.</li>
-            </ol>
+            {mode === 'wager' ? (
+              <ol className="text-xs text-white/80 space-y-1.5">
+                <li><span className="text-[#0BB89A] font-bold">1.</span> Share the confirm link with Party B.</li>
+                <li><span className="text-[#0BB89A] font-bold">2.</span> Party B confirms participation.</li>
+                <li><span className="text-[#0BB89A] font-bold">3.</span> Both parties fund {amount} {selectedToken} each (total pot: {(parseFloat(amount || '0') * 2).toFixed(2)}).</li>
+                <li><span className="text-[#0BB89A] font-bold">4.</span> The judge decides the winner.</li>
+              </ol>
+            ) : (
+              <ol className="text-xs text-white/80 space-y-1.5">
+                <li><span className="text-[#0BB89A] font-bold">1.</span> Share the seller confirm link below.</li>
+                <li><span className="text-[#0BB89A] font-bold">2.</span> Seller confirms escrow participation.</li>
+                <li><span className="text-[#0BB89A] font-bold">3.</span> Buyer funds {amount} {selectedToken}.</li>
+                <li><span className="text-[#0BB89A] font-bold">4.</span> After deadline, escrow can be finalized and funds are released.</li>
+              </ol>
+            )}
           </div>
 
           {hasCode && <div className="grid grid-cols-1 gap-2 mb-3">
             <p className="text-[11px] text-white/65">
-              Seller action: this link is for the seller to confirm.
+              {mode === 'wager' ? 'Party B action: send this link for them to confirm.' : 'Seller action: this link is for the seller to confirm.'}
             </p>
             <ShareModal
               shareUrl={confirmShareUrl}
               walletUrls={confirmWalletUrls}
               title="Share confirm link"
-              description="Send to seller to confirm escrow participation."
-              triggerLabel="Share seller confirm link"
+              description={mode === 'wager' ? 'Send to Party B to confirm wager participation.' : 'Send to seller to confirm escrow participation.'}
+              triggerLabel={mode === 'wager' ? 'Share Party B confirm link' : 'Share seller confirm link'}
               triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
             />
             <p className="text-[11px] text-white/65 mt-1">
-              Buyer action: share this after seller confirms so buyer can fund.
+              {mode === 'wager' ? 'Funding: share this so both parties can fund their half.' : 'Buyer action: share this after seller confirms so buyer can fund.'}
             </p>
             <ShareModal
               shareUrl={fundShareUrl}
               walletUrls={fundWalletUrls}
               title="Share funding link"
-              description="Send to buyer to fund this escrow."
-              triggerLabel="Share buyer funding link"
+              description={mode === 'wager' ? 'Send to both parties to fund the wager.' : 'Send to buyer to fund this escrow.'}
+              triggerLabel={mode === 'wager' ? 'Share funding link' : 'Share buyer funding link'}
               triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
             />
           </div>}
@@ -577,7 +612,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             onClick={resetForm}
             className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-[#0BB89A] hover:bg-[#0BB89A]/90 active:scale-[0.99] transition-all mt-3"
           >
-            Create Another Escrow
+            {mode === 'wager' ? 'Create Another Wager' : 'Create Another Escrow'}
           </button>
         </div>
       </motion.div>
@@ -592,7 +627,27 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
       className="relative z-30 w-[320px]"
     >
       <div className="surface-card p-5">
-        <h2 className="text-lg font-bold text-white mb-3">Create Escrow</h2>
+        {/* Mode toggle */}
+        <div className="flex rounded-lg border border-white/40 overflow-hidden mb-4">
+          {(['escrow', 'wager'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => handleModeSwitch(m)}
+              className={`flex-1 py-2 text-sm font-semibold transition-colors ${
+                mode === m
+                  ? 'bg-[#0BB89A] text-white'
+                  : 'bg-white/10 text-white/70 hover:bg-white/20'
+              }`}
+            >
+              {m === 'escrow' ? 'Escrow' : 'Wager'}
+            </button>
+          ))}
+        </div>
+
+        <h2 className="text-lg font-bold text-white mb-3">
+          {mode === 'wager' ? 'Create Wager' : 'Create Escrow'}
+        </h2>
         
         {error && (
           <div className="mb-3 p-2.5 bg-red-500/20 border border-red-500/50 rounded-lg">
@@ -605,7 +660,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
           <div className="flex gap-2">
             <div className="flex-1">
               <label htmlFor="amount" className="block text-xs font-semibold text-white/90 mb-1">
-                Amount
+                {mode === 'wager' ? 'Wager (per side)' : 'Amount'}
               </label>
               <input
                 type="number"
@@ -615,7 +670,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
                   setAmount(e.target.value);
                   if (errors.amount) setErrors({ ...errors, amount: '' });
                 }}
-                placeholder="100.00"
+                placeholder={mode === 'wager' ? '10.00' : '100.00'}
                 step="0.01"
                 min="0"
                 className={`w-full px-2.5 py-2.5 md:py-2 rounded-lg focus:outline-none transition-colors surface-input text-white text-sm placeholder:text-white/50 ${
@@ -623,6 +678,11 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
                 }`}
                 required
               />
+              {mode === 'wager' && amount && parseFloat(amount) > 0 && (
+                <p className="mt-0.5 text-[10px] text-white/50">
+                  Total pot: {(parseFloat(amount) * 2).toFixed(2)} {selectedToken}
+                </p>
+              )}
               {errors.amount && (
                 <p className="mt-0.5 text-xs text-red-400">{errors.amount}</p>
               )}
@@ -680,7 +740,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
           {/* Buyer Address (Funding Address) */}
           <div>
             <label htmlFor="fundingAddress" className="block text-xs font-semibold text-white/90 mb-1">
-              Buyer Wallet Address (Funder)
+              {mode === 'wager' ? 'Party A Wallet (Creator)' : 'Buyer Wallet Address (Funder)'}
             </label>
             <div className="relative">
               <input
@@ -722,7 +782,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
           {/* Seller Address (Counterparty/Payout) */}
           <div>
             <label htmlFor="counterparty" className="block text-xs font-semibold text-white/90 mb-1">
-              Seller Wallet Address (Payout)
+              {mode === 'wager' ? 'Party B Wallet (Opponent)' : 'Seller Wallet Address (Payout)'}
             </label>
             <div className="relative">
               <input
@@ -783,23 +843,28 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             <button
               type="button"
               onClick={() => {
+                if (mode === 'wager') return;
                 setShowAdvanced((prev) => {
                   const next = !prev;
                   if (!next) setShowAdvancedArbitrationInfo(false);
                   return next;
                 });
               }}
-              className="flex w-full items-center justify-between text-xs font-semibold text-white/80 hover:text-white transition-colors py-1"
+              className={`flex w-full items-center justify-between text-xs font-semibold text-white/80 hover:text-white transition-colors py-1 ${
+                mode === 'wager' ? 'cursor-default' : ''
+              }`}
             >
-              Add arbitrators (optional)
-              <ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
+              {mode === 'wager' ? 'Judge / Arbitrator(s) (required)' : 'Add arbitrators (optional)'}
+              {mode !== 'wager' && (
+                <ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
+              )}
             </button>
 
             {showAdvanced && (
               <div className="mt-2 rounded-lg border border-white/20 bg-white/10 p-2.5 space-y-2">
                 <div>
                   <label htmlFor="arbitrator1" className="block text-[11px] font-semibold text-white/90 mb-1">
-                    Arbitrator #1
+                    {mode === 'wager' ? 'Judge' : 'Arbitrator #1'}
                   </label>
                   <input
                     type="text"
@@ -864,10 +929,19 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
                 </div>
 
                 <p className="text-[10px] text-white/70">
-                  1 arbitrator: they can release funds to either side if there&apos;s a dispute.
-                  <br />
-                  <br />
-                  3 arbitrators: 2 of 3 must agree. The 3rd acts as a tiebreaker when needed.
+                  {mode === 'wager' ? (
+                    <>
+                      1 judge: they decide the winner. The loser&apos;s funds go to the winner.
+                      <br /><br />
+                      3 judges: 2 of 3 must agree. The 3rd breaks a tie.
+                    </>
+                  ) : (
+                    <>
+                      1 arbitrator: they can release funds to either side if there&apos;s a dispute.
+                      <br /><br />
+                      3 arbitrators: 2 of 3 must agree. The 3rd acts as a tiebreaker when needed.
+                    </>
+                  )}
                 </p>
 
                 <div>
@@ -922,10 +996,10 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   {createStep === 'signing' && 'Sign in wallet...'}
                   {createStep === 'confirming' && 'Confirming on chain...'}
-                  {createStep === 'registering' && 'Registering escrow...'}
+                  {createStep === 'registering' && (mode === 'wager' ? 'Registering wager...' : 'Registering escrow...')}
                 </span>
               ) : (
-                'Create Escrow'
+                mode === 'wager' ? 'Create Wager' : 'Create Escrow'
               )}
             </button>
           )}
@@ -934,9 +1008,12 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
         {/* Info - lower contrast on mobile */}
         <div className="mt-3 p-2.5 bg-white/5 md:bg-white/10 rounded-lg border border-white/10 md:border-white/20 backdrop-blur-sm">
           <p className="text-[10px] text-white/60 md:text-white/80 leading-relaxed">
-            <strong className="text-white/80 md:text-white">Fees:</strong> 1% fee, capped at $1.
+            <strong className="text-white/80 md:text-white">Fees:</strong> 1% fee{mode === 'wager' ? ' on winnings' : ''}, capped at $1.
             <br />
-            <strong className="text-white/80 md:text-white">Tip:</strong> You can verify all transactions on arbiscan
+            <strong className="text-white/80 md:text-white">Tip:</strong>{' '}
+            {mode === 'wager'
+              ? 'The arbitrator decides the winner. Loser\'s funds go to the winner minus fees.'
+              : 'You can verify all transactions on arbiscan'}
           </p>
         </div>
       </div>

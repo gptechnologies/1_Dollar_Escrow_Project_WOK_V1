@@ -645,3 +645,218 @@ await sellerWallet.writeContract({
 });
 // Seller receives $99 (targetAmount - fee), treasury receives $1 fee
 ```
+
+## Agent Wagers (Betting)
+
+Wagers between agents (or any two parties) are built entirely on the existing escrow primitives. No special contracts are needed -- the escrow contract already supports this use case natively.
+
+### Concept
+
+A wager is an escrow where both parties put money in, and an arbitrator decides who gets the pot. The loser's funds go to the winner (minus the standard fee).
+
+### Parameter Mapping
+
+| Wager Concept | Escrow Parameter | Notes |
+|---------------|------------------|-------|
+| **Party A** (creator) | `_payout` | Receives pot if they win (`arbitratorRelease`) |
+| **Party B** (opponent) | `_funder` | Receives pot if they win (`arbitratorRefund`) |
+| **Wager amount** (total pot) | `_targetAmount` | Full pot, e.g. `20_000_000n` for a $10/side bet ($20 total) |
+| **Each side's stake** | `_targetAmount / 2` | Each party transfers half to the escrow address |
+| **Judge** | `_arbitrator1` | Single arbitrator who decides the winner |
+| **Judging panel** | `_arbitrator1`, `_arbitrator2`, `_arbitrator3` | 2-of-3 panel with deadlock breaker |
+| **Deadline** | `_deadline` | Arbitrator must vote before `deadline + 7 days` (arb window) |
+| **Token** | `_token` | USDC or USDT |
+
+### Outcome Mapping
+
+| Result | Arbitrator Call | Effect |
+|--------|-----------------|--------|
+| **Party A wins** | `arbitratorRelease()` | Party A receives `targetAmount - fee` |
+| **Party B wins** | `arbitratorRefund()` | Party B receives `targetAmount` (fee only applies to release) |
+| **No vote before arb window ends** | `sweepToTreasuryAfterArbWindow()` | Funds go to treasury (both parties lose) |
+
+### Lifecycle
+
+```
+1. Party A creates escrow (createEscrowSimple)
+   - _payout = Party A address
+   - _funder = Party B address
+   - _targetAmount = full pot (2x each side's stake)
+   - _arbitrator1 = judge address (or set all 3 for a panel)
+   - _deadline = resolution deadline
+
+2. Party A confirms (confirm())
+   - Must happen within 24 hours of creation
+
+3. Both parties fund their half
+   - Party A: ERC-20 transfer(escrowAddress, targetAmount / 2)
+   - Party B: ERC-20 transfer(escrowAddress, targetAmount / 2)
+   - isFunded() returns true once balance >= targetAmount
+
+4. Arbitrator decides the winner
+   - arbitratorRelease() → Party A wins (receives pot minus fee)
+   - arbitratorRefund()  → Party B wins (receives pot)
+   - Must vote during arb window: [deadline, deadline + 7 days]
+```
+
+### Arbitrator Configurations
+
+**Single judge** (simplest): Set `_arbitrator1` to the judge's address, `_arbitrator2` and `_arbitrator3` to `0x0`. The single arbitrator's vote is final.
+
+**2-of-3 panel**: Set all three arbitrator addresses. Arb1 and arb2 both vote. If they agree, the result is final. If they disagree (deadlock), arb3 breaks the tie.
+
+### Complete viem Example: $10/side Wager with Single Arbitrator
+
+```typescript
+import { createPublicClient, createWalletClient, http, parseEventLogs } from 'viem';
+import { arbitrum } from 'viem/chains';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const FACTORY = '0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9';
+const USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
+const ZERO = '0x0000000000000000000000000000000000000000';
+
+const partyA = privateKeyToAccount('0xPARTY_A_KEY');
+const partyB = privateKeyToAccount('0xPARTY_B_KEY');
+const judge  = privateKeyToAccount('0xJUDGE_KEY');
+
+const publicClient = createPublicClient({ chain: arbitrum, transport: http() });
+const walletA = createWalletClient({ account: partyA, chain: arbitrum, transport: http() });
+const walletB = createWalletClient({ account: partyB, chain: arbitrum, transport: http() });
+const walletJudge = createWalletClient({ account: judge, chain: arbitrum, transport: http() });
+
+const WAGER_PER_SIDE = 10_000_000n;  // $10 each
+const TOTAL_POT = WAGER_PER_SIDE * 2n; // $20 total
+const deadline = BigInt(Math.floor(Date.now() / 1000) + 3 * 24 * 60 * 60); // 3 days
+
+const factoryABI = [{
+  inputs: [
+    { name: '_payout', type: 'address' },
+    { name: '_funder', type: 'address' },
+    { name: '_token', type: 'address' },
+    { name: '_targetAmount', type: 'uint256' },
+    { name: '_deadline', type: 'uint64' },
+    { name: '_arbitrator1', type: 'address' },
+    { name: '_arbitrator2', type: 'address' },
+    { name: '_arbitrator3', type: 'address' },
+  ],
+  name: 'createEscrowSimple',
+  outputs: [{ name: 'escrow', type: 'address' }],
+  stateMutability: 'nonpayable',
+  type: 'function',
+}, {
+  anonymous: false,
+  inputs: [
+    { indexed: true, name: 'escrow', type: 'address' },
+    { indexed: false, name: 'payout', type: 'address' },
+    { indexed: false, name: 'funder', type: 'address' },
+    { indexed: false, name: 'token', type: 'address' },
+    { indexed: false, name: 'targetAmount', type: 'uint256' },
+    { indexed: false, name: 'deadline', type: 'uint64' },
+    { indexed: false, name: 'createdAt', type: 'uint64' },
+    { indexed: false, name: 'confirmDeadline', type: 'uint64' },
+    { indexed: false, name: 'arbWindowEnd', type: 'uint64' },
+    { indexed: false, name: 'arbitrator1', type: 'address' },
+    { indexed: false, name: 'arbitrator2', type: 'address' },
+    { indexed: false, name: 'arbitrator3', type: 'address' },
+  ],
+  name: 'EscrowCreated',
+  type: 'event',
+}] as const;
+
+const erc20ABI = [{
+  inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }],
+  name: 'transfer', outputs: [{ type: 'bool' }], stateMutability: 'nonpayable', type: 'function',
+}] as const;
+
+const escrowABI = [
+  { inputs: [], name: 'confirm', outputs: [], stateMutability: 'nonpayable', type: 'function' },
+  { inputs: [], name: 'arbitratorRelease', outputs: [], stateMutability: 'nonpayable', type: 'function' },
+  { inputs: [], name: 'arbitratorRefund', outputs: [], stateMutability: 'nonpayable', type: 'function' },
+  { inputs: [], name: 'isFunded', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
+] as const;
+
+// --- Step 1: Party A creates the wager ---
+const createHash = await walletA.writeContract({
+  address: FACTORY, abi: factoryABI, functionName: 'createEscrowSimple',
+  args: [
+    partyA.address,    // payout (Party A wins → gets pot)
+    partyB.address,    // funder (Party B wins → gets refund)
+    USDC,              // token
+    TOTAL_POT,         // $20 total pot
+    deadline,          // 3 days from now
+    judge.address,     // single arbitrator
+    ZERO,              // no arb2
+    ZERO,              // no arb3
+  ],
+});
+const receipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
+const escrowAddress = parseEventLogs({
+  abi: factoryABI, logs: receipt.logs, eventName: 'EscrowCreated',
+})[0].args.escrow;
+console.log('Wager escrow:', escrowAddress);
+
+// --- Step 2: Party A confirms (within 24h) ---
+await walletA.writeContract({
+  address: escrowAddress, abi: escrowABI, functionName: 'confirm',
+});
+
+// --- Step 3: Both parties fund their half ---
+await walletA.writeContract({
+  address: USDC, abi: erc20ABI, functionName: 'transfer',
+  args: [escrowAddress, WAGER_PER_SIDE], // $10 from Party A
+});
+
+await walletB.writeContract({
+  address: USDC, abi: erc20ABI, functionName: 'transfer',
+  args: [escrowAddress, WAGER_PER_SIDE], // $10 from Party B
+});
+
+// Verify fully funded
+const funded = await publicClient.readContract({
+  address: escrowAddress, abi: escrowABI, functionName: 'isFunded',
+});
+console.log('Funded:', funded); // true
+
+// --- Step 4: Arbitrator decides the winner ---
+// Party A wins:
+await walletJudge.writeContract({
+  address: escrowAddress, abi: escrowABI, functionName: 'arbitratorRelease',
+});
+// Party A receives ~$19.80 ($20 pot minus $0.20 fee)
+
+// OR Party B wins:
+// await walletJudge.writeContract({
+//   address: escrowAddress, abi: escrowABI, functionName: 'arbitratorRefund',
+// });
+// Party B receives $20 (full pot)
+```
+
+### Edge Cases
+
+| Scenario | What Happens |
+|----------|-------------|
+| Only one party funds before deadline | Escrow is not funded. After deadline, call `expireIfNotFunded()` to expire. Funded party can recover via `sweepToTreasury()` after expiry. |
+| Arbitrator never votes | After arb window ends (`deadline + 7 days`), anyone calls `sweepToTreasuryAfterArbWindow()`. Funds go to treasury -- both parties lose. Choose a reliable arbitrator. |
+| Both parties want to cancel | Both call `approveMutualRefund()`. Party B (funder role) receives the full pot back. To split evenly, handle the split off-chain after refund. |
+| Party A also wants to be the arbitrator | Not allowed. Arbitrators cannot be the buyer or seller. Use a neutral third party. |
+
+### Fee Impact on Winnings
+
+The standard fee (1% capped at $1) applies only when `arbitratorRelease()` is called (Party A wins). It is deducted from Party A's payout.
+
+- $20 pot → Party A wins → receives $19.80 (fee = $0.20, which is 1% of $20)
+- $200 pot → Party A wins → receives $199 (fee = $1, capped)
+- $20 pot → Party B wins via `arbitratorRefund()` → receives $20 (no fee on refunds)
+
+### Quick Reference for Agents
+
+To create a wager programmatically, an agent needs:
+
+1. **Own wallet address** (will be `_payout` if creating, or `_funder` if accepting)
+2. **Opponent's wallet address**
+3. **Agreed wager amount per side** (multiply by 2 for `_targetAmount`)
+4. **Arbitrator address(es)** -- a trusted judge both parties agree on
+5. **Deadline** -- unix timestamp by which the arbitrator must begin voting
+6. **USDC or USDT** for the token
+7. Enough tokens to fund their half, plus ETH for gas on Arbitrum (~$0.01-0.05 per tx)

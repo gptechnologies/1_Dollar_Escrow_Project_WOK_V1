@@ -250,6 +250,7 @@ function HomeContent({
                         <li><strong className="text-white">Arbitrate</strong> &mdash; arbitrators call <code className="text-[#0BB89A]">arbitratorRelease()</code> or <code className="text-[#0BB89A]">arbitratorRefund()</code></li>
                         <li><strong className="text-white">Mutual actions</strong> &mdash; both parties can agree to early release, refund, deadline extension, or arbitrator swap</li>
                         <li><strong className="text-white">Accept payments</strong> &mdash; create QR-based payment links via the <code className="text-[#0BB89A]">POST /payment/create</code> API</li>
+                        <li><strong className="text-white">Agent wagers</strong> &mdash; create bets between agents using escrow + arbitrator. Both sides fund half, arbitrator calls <code className="text-[#0BB89A]">arbitratorRelease()</code> or <code className="text-[#0BB89A]">arbitratorRefund()</code> to pick the winner</li>
                       </ul>
 
                       <p className="mb-2">Full reference with ABIs, code examples, lifecycle diagrams, and API endpoints:</p>
