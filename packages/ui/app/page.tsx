@@ -81,10 +81,8 @@ function HomeContent({
                 </div>
                 <p className="text-sm text-white/70">Instant P2P payments</p>
               </div>
-              <div className="pt-2 px-4 max-w-7xl mx-auto">
-                <div className="flex-shrink-0 mx-auto">
-                  <CreateEscrowCard initialValues={prefillCreate} />
-                </div>
+              <div className="pt-2 px-4 flex justify-center">
+                <CreateEscrowCard initialValues={prefillCreate} />
               </div>
             </div>
 
