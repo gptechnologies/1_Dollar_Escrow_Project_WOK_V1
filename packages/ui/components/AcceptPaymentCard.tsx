@@ -188,28 +188,6 @@ export default function AcceptPaymentCard() {
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-3">
-        {/* Wallet address */}
-        <div>
-          <label className="text-xs text-white/70 mb-1 block">Your Wallet Address</label>
-          <div className="flex items-center gap-1">
-            <input
-              type="text"
-              value={wallet}
-              onChange={(e) => setWallet(e.target.value.trim())}
-              placeholder="0x ..."
-              className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#0BB89A]/70 transition-colors"
-            />
-            <button
-              type="button"
-              onClick={handlePaste}
-              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
-              title="Paste address"
-            >
-              <ClipboardPaste className="w-4 h-4 text-white/60" />
-            </button>
-          </div>
-        </div>
-
         {/* Amount + Token */}
         <div className="flex gap-2">
           <div className="flex-1">
@@ -237,6 +215,28 @@ export default function AcceptPaymentCard() {
                 </option>
               ))}
             </select>
+          </div>
+        </div>
+
+        {/* Wallet address */}
+        <div>
+          <label className="text-xs text-white/70 mb-1 block">Your Wallet Address</label>
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              value={wallet}
+              onChange={(e) => setWallet(e.target.value.trim())}
+              placeholder="0x ..."
+              className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#0BB89A]/70 transition-colors"
+            />
+            <button
+              type="button"
+              onClick={handlePaste}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+              title="Paste address"
+            >
+              <ClipboardPaste className="w-4 h-4 text-white/60" />
+            </button>
           </div>
         </div>
 
