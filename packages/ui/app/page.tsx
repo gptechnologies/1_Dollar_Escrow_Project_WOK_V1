@@ -22,12 +22,14 @@ const TAGLINES = ['No Bank', 'No Middleman', 'Instant Settlement', 'All you need
 
 function CenterHero() {
   const [visible, setVisible] = useState<number[]>([]);
+  const [showLink, setShowLink] = useState(false);
 
   useEffect(() => {
     const timers = TAGLINES.map((_, i) =>
       setTimeout(() => setVisible((prev) => [...prev, i]), 600 + i * 500)
     );
-    return () => timers.forEach(clearTimeout);
+    const linkTimer = setTimeout(() => setShowLink(true), 600 + TAGLINES.length * 500);
+    return () => { timers.forEach(clearTimeout); clearTimeout(linkTimer); };
   }, []);
 
   return (
@@ -51,7 +53,11 @@ function CenterHero() {
       </div>
       <a
         href="#how-it-works"
-        className="mt-6 flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-colors"
+        className="mt-6 flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-all duration-700"
+        style={{
+          opacity: showLink ? 1 : 0,
+          transform: showLink ? 'translateY(0)' : 'translateY(8px)',
+        }}
       >
         How it works
         <ChevronDown className="w-4 h-4 animate-bounce" />

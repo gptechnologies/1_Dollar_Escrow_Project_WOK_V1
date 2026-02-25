@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import QRCode from 'react-qr-code';
+import BrandedQRCode from '@/components/BrandedQRCode';
 import { Copy, Check, Wallet, Loader2, ExternalLink, ShieldCheck } from 'lucide-react';
 import {
   shortenAddress,
@@ -222,8 +222,8 @@ export default function PaymentPageClient({
           <span className="text-sm text-white/60 ml-1.5">{tokenSymbol}</span>
         </div>
 
-        <div className="bg-white rounded-xl p-4 mx-auto w-fit mb-5">
-          <QRCode value={paymentUrl} size={200} level="M" />
+        <div className="mb-5">
+          <BrandedQRCode value={paymentUrl} size={200} />
         </div>
 
         {useRouter && (

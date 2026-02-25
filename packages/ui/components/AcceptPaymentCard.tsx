@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Loader2, Copy, Check, ClipboardPaste, QrCode, ArrowLeft } from 'lucide-react';
-import QRCode from 'react-qr-code';
+import BrandedQRCode from '@/components/BrandedQRCode';
 import { USDC_ADDRESS, USDT_ADDRESS } from '@/lib/chain';
 import { buildPaymentUrl } from '@/lib/payment';
 
@@ -147,8 +147,8 @@ export default function AcceptPaymentCard() {
           <span className="text-sm text-white/60 ml-1">{createdLink.tokenSymbol}</span>
         </div>
 
-        <div className="bg-white rounded-xl p-3 mx-auto w-fit mb-4">
-          <QRCode value={paymentUrl} size={180} level="M" />
+        <div className="mb-4">
+          <BrandedQRCode value={paymentUrl} size={180} />
         </div>
 
         <div className="space-y-2">

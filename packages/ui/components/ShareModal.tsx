@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import QRCode from 'react-qr-code';
+import BrandedQRCode from '@/components/BrandedQRCode';
 import { Check, Copy, QrCode, Share2, X } from 'lucide-react';
 import type { WalletTarget } from '@/lib/share';
 
@@ -112,8 +112,8 @@ export default function ShareModal({
               </div>
             )}
 
-            <div className="bg-white rounded-xl p-3 flex items-center justify-center mb-4">
-              <QRCode value={activeUrl} size={180} />
+            <div className="mb-4">
+              <BrandedQRCode value={activeUrl} size={180} />
             </div>
 
             {walletUrls && selectedWallet !== 'web' && (
