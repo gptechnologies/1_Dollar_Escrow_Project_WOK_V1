@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
   title: {
-    default: "Crow | Peer-to-Peer Escrow",
+    default: "Crow | Instant P2P Payments",
     template: "%s | Crow Escrow",
   },
   description: "Create escrows instantly with no sign up. Powered by Arbitrum, fees capped at $1.",
@@ -23,20 +23,20 @@ export const metadata: Metadata = {
     type: "website",
     url: "/",
     siteName: "Crow Escrow",
-    title: "Crow | Peer-to-Peer Escrow",
+    title: "Crow | Instant P2P Payments",
     description: "The easiest way to create and settle USDC/USDT escrows on Arbitrum.",
     images: [
       {
         url: "/og-image.svg",
         width: 1200,
         height: 630,
-        alt: "Crow Escrow preview",
+        alt: "Crow Instant P2P Payments",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Crow | Peer-to-Peer Escrow",
+    title: "Crow | Instant P2P Payments",
     description: "The easiest way to create and settle USDC/USDT escrows on Arbitrum.",
     images: ["/og-image.svg"],
   },

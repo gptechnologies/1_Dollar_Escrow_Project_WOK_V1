@@ -49,6 +49,13 @@ function CenterHero() {
           </p>
         ))}
       </div>
+      <a
+        href="#how-it-works"
+        className="mt-6 flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-colors"
+      >
+        How it works
+        <ChevronDown className="w-4 h-4 animate-bounce" />
+      </a>
     </div>
   );
 }
@@ -102,15 +109,8 @@ function HomeContent({
                 <CenterHero />
 
                 {/* RIGHT: Accept Payment */}
-                <div className="flex-shrink-0 flex flex-col items-center gap-3">
+                <div className="flex-shrink-0">
                   <AcceptPaymentCard />
-                  <a
-                    href="#how-it-works"
-                    className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white/80 transition-colors"
-                  >
-                    How it works
-                    <ChevronDown className="w-4 h-4 animate-bounce" />
-                  </a>
                 </div>
               </div>
             </div>

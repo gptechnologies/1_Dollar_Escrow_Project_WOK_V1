@@ -273,12 +273,11 @@ export default function AcceptPaymentCard() {
         </button>
       </form>
 
-      <div className="mt-3 px-1 space-y-1">
-        <p className="text-[11px] text-white/40 leading-relaxed">
-          <span className="text-white/60 font-medium">Fees:</span> None
-        </p>
-        <p className="text-[11px] text-white/40 leading-relaxed">
-          <span className="text-white/60 font-medium">Tip:</span> Use it as a price tag, embed it on your site, or send the link directly. It works like a digital invoice.
+      <div className="mt-3 p-2.5 bg-white/5 md:bg-white/10 rounded-lg border border-white/10 md:border-white/20 backdrop-blur-sm">
+        <p className="text-[10px] text-white/60 md:text-white/80 leading-relaxed">
+          <strong className="text-white/80 md:text-white">Fees:</strong> None
+          <br />
+          <strong className="text-white/80 md:text-white">Tip:</strong> Use it as a price tag, embed it on your site, or send the link directly. It works like a digital invoice.
         </p>
       </div>
     </div>

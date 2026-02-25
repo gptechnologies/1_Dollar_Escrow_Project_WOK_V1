@@ -592,7 +592,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
       className="relative z-30 w-[320px]"
     >
       <div className="surface-card p-5">
-        <h2 className="text-lg font-bold text-white mb-3">Create Instant Escrow</h2>
+        <h2 className="text-lg font-bold text-white mb-3">Create Escrow</h2>
         
         {error && (
           <div className="mb-3 p-2.5 bg-red-500/20 border border-red-500/50 rounded-lg">
