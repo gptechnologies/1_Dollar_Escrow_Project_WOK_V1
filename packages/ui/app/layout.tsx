@@ -15,16 +15,16 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
   title: {
-    default: "Crow | Instant P2P Payments",
-    template: "%s | Crow Escrow",
+    default: "Crow | USDC Payments",
+    template: "%s | Crow",
   },
-  description: "Create escrows instantly with no sign up. Powered by Arbitrum, fees capped at $1.",
+  description: "Create Base USDC price tags and Arbitrum escrows with no sign up.",
   openGraph: {
     type: "website",
     url: "/",
-    siteName: "Crow Escrow",
-    title: "Crow | Instant P2P Payments",
-    description: "The easiest way to create and settle USDC/USDT escrows on Arbitrum.",
+    siteName: "Crow",
+    title: "Crow | USDC Payments",
+    description: "Create Base USDC price tags and Arbitrum escrows with no sign up.",
     images: [
       {
         url: "/og-image.svg",
@@ -36,8 +36,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Crow | Instant P2P Payments",
-    description: "The easiest way to create and settle USDC/USDT escrows on Arbitrum.",
+    title: "Crow | USDC Payments",
+    description: "Create Base USDC price tags and Arbitrum escrows with no sign up.",
     images: ["/og-image.svg"],
   },
 };
