@@ -5,6 +5,7 @@ import { pay } from '@base-org/account';
 import { Check, Copy, CreditCard, ExternalLink, Loader2, ShieldCheck, Wallet } from 'lucide-react';
 import BrandedQRCode from '@/components/BrandedQRCode';
 import type { PriceTag, PriceTagPayment } from '@/lib/base-price-tags/types';
+import { buildCoinbaseWalletDeepLink, getCurrentUrl } from '@/lib/wallet';
 
 type PaymentStep =
   | 'idle'
@@ -63,6 +64,11 @@ export default function BasePayPaymentClient({
   const [step, setStep] = useState<PaymentStep>('idle');
   const [payment, setPayment] = useState<PriceTagPayment | null>(null);
   const [error, setError] = useState('');
+  const [paymentPageUrl, setPaymentPageUrl] = useState('');
+
+  useEffect(() => {
+    setPaymentPageUrl(getCurrentUrl());
+  }, []);
 
   const confirmPayment = async (paymentId: string) => {
     const response = await fetch('/api/payments/confirm', {
@@ -386,6 +392,15 @@ export default function BasePayPaymentClient({
                 <p className="text-[11px] text-white/45 text-center -mt-1">
                   Best if you already use Base or Coinbase.
                 </p>
+                {paymentPageUrl ? (
+                  <a
+                    href={buildCoinbaseWalletDeepLink(paymentPageUrl)}
+                    className="flex items-center justify-center gap-1 text-[11px] text-white/55 hover:text-white transition-colors"
+                  >
+                    Open this payment in the Base app
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                ) : null}
 
                 <button
                   type="button"
