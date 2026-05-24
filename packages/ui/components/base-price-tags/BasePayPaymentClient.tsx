@@ -1,11 +1,20 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, Copy, ExternalLink, Loader2, ShieldCheck } from 'lucide-react';
+import { pay } from '@base-org/account';
+import { Check, Copy, CreditCard, ExternalLink, Loader2, ShieldCheck, Wallet } from 'lucide-react';
 import BrandedQRCode from '@/components/BrandedQRCode';
 import type { PriceTag, PriceTagPayment } from '@/lib/base-price-tags/types';
 
-type PaymentStep = 'idle' | 'paying' | 'pending' | 'confirmed' | 'failed';
+type PaymentStep =
+  | 'idle'
+  | 'base_paying'
+  | 'onramp_creating_session'
+  | 'onramp_redirecting'
+  | 'pending'
+  | 'confirmed'
+  | 'failed'
+  | 'cancelled';
 
 function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -34,7 +43,23 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   );
 }
 
-export default function BasePayPaymentClient({ priceTag }: { priceTag: PriceTag }) {
+function isLikelyUserCancel(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  return message.includes('cancel') || message.includes('reject') || message.includes('closed');
+}
+
+function isOnrampEligible(priceTag: PriceTag): boolean {
+  return BigInt(priceTag.amountRaw) >= BigInt(5_000_000);
+}
+
+export default function BasePayPaymentClient({
+  priceTag,
+  initialOnrampAttemptId,
+}: {
+  priceTag: PriceTag;
+  initialOnrampAttemptId?: string;
+}) {
   const [step, setStep] = useState<PaymentStep>('idle');
   const [payment, setPayment] = useState<PriceTagPayment | null>(null);
   const [error, setError] = useState('');
@@ -67,6 +92,71 @@ export default function BasePayPaymentClient({ priceTag }: { priceTag: PriceTag 
 
     return false;
   };
+
+  const confirmPaymentById = async (paymentId: string) => {
+    const response = await fetch(`/api/payments/${paymentId}/status`, {
+      method: 'POST',
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to verify payment');
+    }
+
+    setPayment(data.payment);
+
+    if (data.payment.status === 'confirmed') {
+      setStep('confirmed');
+      return true;
+    }
+
+    if (data.payment.status === 'failed' || data.payment.status === 'cancelled') {
+      setStep(data.payment.status);
+      setError(data.payment.failureReason || 'Payment was not completed');
+      return true;
+    }
+
+    return false;
+  };
+
+  useEffect(() => {
+    if (!initialOnrampAttemptId) {
+      return;
+    }
+
+    setStep('pending');
+    setError('');
+
+    let cancelled = false;
+    let attempts = 0;
+
+    const poll = async () => {
+      if (cancelled) {
+        return;
+      }
+
+      attempts += 1;
+
+      try {
+        const done = await confirmPaymentById(initialOnrampAttemptId);
+
+        if (!done && attempts < 40) {
+          setTimeout(poll, 3000);
+        } else if (!done) {
+          setError('Payment may still be processing. Refresh this page to check again.');
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Payment verification failed');
+      }
+    };
+
+    void poll();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialOnrampAttemptId]);
 
   useEffect(() => {
     if (step !== 'pending' || !payment) {
@@ -110,17 +200,16 @@ export default function BasePayPaymentClient({ priceTag }: { priceTag: PriceTag 
 
   const handlePay = async () => {
     setError('');
-    setStep('paying');
+    setStep('base_paying');
 
     try {
-      const { pay } = await import('@base-org/account');
       const result = await pay({
         amount: priceTag.amountDisplay,
         to: priceTag.recipientAddress,
         testnet: priceTag.chainId === 84532,
       });
 
-      const response = await fetch('/api/payments', {
+      const response = await fetch('/api/payments/base', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -140,10 +229,44 @@ export default function BasePayPaymentClient({ priceTag }: { priceTag: PriceTag 
 
       await confirmPayment(data.payment.id);
     } catch (err) {
-      setStep('failed');
-      setError(err instanceof Error ? err.message : 'Payment failed or was cancelled');
+      if (isLikelyUserCancel(err)) {
+        setStep('cancelled');
+        setError('Payment was cancelled. You can try again or use the card option.');
+      } else {
+        setStep('failed');
+        setError(err instanceof Error ? err.message : 'Payment failed or was cancelled');
+      }
     }
   };
+
+  const handleOnramp = async () => {
+    setError('');
+    setStep('onramp_creating_session');
+
+    try {
+      const response = await fetch('/api/payments/onramp-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: priceTag.code }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to start card payment');
+      }
+
+      setPayment(data.payment);
+      setStep('onramp_redirecting');
+      window.location.assign(data.onrampUrl);
+    } catch (err) {
+      setStep('failed');
+      setError(err instanceof Error ? err.message : 'Could not start card payment');
+    }
+  };
+
+  const busy = step === 'base_paying' || step === 'pending' || step === 'onramp_creating_session' || step === 'onramp_redirecting';
+  const onrampEligible = isOnrampEligible(priceTag);
 
   return (
     <main className="min-h-screen relative flex items-center justify-center px-4 py-12">
@@ -205,11 +328,17 @@ export default function BasePayPaymentClient({ priceTag }: { priceTag: PriceTag 
           </div>
         ) : (
           <div className="space-y-3">
-            {(step === 'pending' || step === 'paying') && (
+            {busy && (
               <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-center">
                 <Loader2 className="w-4 h-4 text-[#0BB89A] animate-spin mx-auto mb-2" />
                 <p className="text-sm text-white/80">
-                  {step === 'paying' ? 'Opening Base Pay...' : 'Payment sent. Waiting for confirmation...'}
+                  {step === 'base_paying'
+                    ? 'Opening Base Pay...'
+                    : step === 'onramp_creating_session'
+                      ? 'Creating secure card payment...'
+                      : step === 'onramp_redirecting'
+                        ? 'Opening Coinbase checkout...'
+                        : 'Payment sent. Waiting for confirmation...'}
                 </p>
               </div>
             )}
@@ -235,21 +364,53 @@ export default function BasePayPaymentClient({ priceTag }: { priceTag: PriceTag 
             )}
 
             {priceTag.isActive ? (
-              <button
-                type="button"
-                onClick={handlePay}
-                disabled={step === 'paying' || step === 'pending'}
-                className="w-full bg-[#0052FF] hover:bg-[#0052FF]/90 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
-              >
-                {step === 'paying' || step === 'pending' ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  `Pay $${priceTag.amountDisplay} with Base`
-                )}
-              </button>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={handlePay}
+                  disabled={busy}
+                  className="w-full bg-[#0052FF] hover:bg-[#0052FF]/90 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  {step === 'base_paying' || step === 'pending' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Wallet className="w-4 h-4" />
+                      Pay with Base
+                    </>
+                  )}
+                </button>
+                <p className="text-[11px] text-white/45 text-center -mt-1">
+                  Best if you already use Base or Coinbase.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={handleOnramp}
+                  disabled={busy || !onrampEligible}
+                  className="w-full border border-white/15 bg-white/8 hover:bg-white/12 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  {step === 'onramp_creating_session' || step === 'onramp_redirecting' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Opening checkout...
+                    </>
+                  ) : (
+                    <>
+                      <CreditCard className="w-4 h-4" />
+                      Pay with debit card or Apple Pay
+                    </>
+                  )}
+                </button>
+                <p className="text-[11px] text-white/45 text-center -mt-1">
+                  {onrampEligible
+                    ? 'For buyers who do not already have USDC.'
+                    : 'Card and Apple Pay payments require a minimum of about $5.00.'}
+                </p>
+              </div>
             ) : (
               <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-center">
                 <p className="text-sm text-white/70">This price tag is inactive.</p>
@@ -257,7 +418,7 @@ export default function BasePayPaymentClient({ priceTag }: { priceTag: PriceTag 
             )}
 
             <p className="text-[11px] text-white/45 text-center leading-relaxed">
-              Crypto payments are final. Review the amount and recipient before confirming in Base Pay.
+              No Crow account required. Review the amount and recipient before confirming payment.
             </p>
           </div>
         )}

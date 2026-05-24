@@ -57,3 +57,12 @@ export function basePayAmountToRaw(amount: string): string {
 
   return (BigInt(whole) * BigInt(10) ** BigInt(USDC_DECIMALS) + BigInt(padded)).toString();
 }
+
+export function displayAmountToSixDecimalAmount(displayAmount: string): string {
+  const raw = BigInt(displayAmountToRaw(displayAmount));
+  const units = BigInt(10) ** BigInt(USDC_DECIMALS);
+  const whole = raw / units;
+  const fractional = raw % units;
+
+  return `${whole}.${fractional.toString().padStart(USDC_DECIMALS, '0')}`;
+}

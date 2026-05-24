@@ -4,6 +4,7 @@ import { getPriceTag } from '@/lib/base-price-tags/repository';
 
 type PageProps = {
   params: Promise<{ code: string }>;
+  searchParams: Promise<{ onramp?: string; attempt?: string }>;
 };
 
 async function getTagForPage(code: string) {
@@ -26,8 +27,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function BasePriceTagPaymentPage({ params }: PageProps) {
+export default async function BasePriceTagPaymentPage({ params, searchParams }: PageProps) {
   const { code } = await params;
+  const query = await searchParams;
   const priceTag = await getTagForPage(code).catch(() => null);
 
   if (!priceTag) {
@@ -45,6 +47,10 @@ export default async function BasePriceTagPaymentPage({ params }: PageProps) {
     );
   }
 
-  return <BasePayPaymentClient priceTag={priceTag} />;
+  return (
+    <BasePayPaymentClient
+      priceTag={priceTag}
+      initialOnrampAttemptId={query.onramp === 'return' ? query.attempt : undefined}
+    />
+  );
 }
-

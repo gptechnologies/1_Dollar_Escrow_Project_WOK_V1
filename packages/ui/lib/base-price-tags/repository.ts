@@ -3,7 +3,14 @@ import { buildBaseScanTxUrl, getBasePriceTagChain } from './config';
 import { createPaymentId, createPriceTagCode } from './code';
 import { ensureBasePriceTagSchema, getSql } from './db';
 import { buildPriceTagPaymentUrl } from './urls';
-import type { PaymentStatus, PriceTag, PriceTagPayment, PriceTagPaymentWithTag } from './types';
+import type {
+  PaymentMethod,
+  PaymentProvider,
+  PaymentStatus,
+  PriceTag,
+  PriceTagPayment,
+  PriceTagPaymentWithTag,
+} from './types';
 
 type PriceTagRow = {
   code: string;
@@ -21,6 +28,9 @@ type PriceTagRow = {
 type PaymentRow = {
   id: string;
   price_tag_code: string;
+  method: PaymentMethod;
+  provider: PaymentProvider;
+  provider_payment_id: string | null;
   tx_hash: string | null;
   expected_amount_raw: string;
   expected_amount_display: string;
@@ -29,8 +39,16 @@ type PaymentRow = {
   token_address: string;
   payer_address: string | null;
   status: PaymentStatus;
+  provider_status: string | null;
+  partner_user_ref: string | null;
+  onramp_url: string | null;
+  payment_currency: string | null;
+  payment_total: string | null;
+  payment_subtotal: string | null;
+  provider_response_json: unknown | null;
   failure_reason: string | null;
   created_at: Date;
+  updated_at: Date;
   confirmed_at: Date | null;
 };
 
@@ -62,6 +80,9 @@ function mapPayment(row: PaymentRow): PriceTagPayment {
   return {
     id: row.id,
     priceTagCode: row.price_tag_code,
+    method: row.method,
+    provider: row.provider,
+    providerPaymentId: row.provider_payment_id,
     txHash: row.tx_hash as `0x${string}` | null,
     expectedAmountRaw: row.expected_amount_raw,
     expectedAmountDisplay: row.expected_amount_display,
@@ -70,9 +91,16 @@ function mapPayment(row: PaymentRow): PriceTagPayment {
     tokenAddress: getAddress(row.token_address) as `0x${string}`,
     payerAddress: row.payer_address ? (getAddress(row.payer_address) as `0x${string}`) : null,
     status: row.status,
+    providerStatus: row.provider_status,
+    partnerUserRef: row.partner_user_ref,
+    onrampUrl: row.onramp_url,
+    paymentCurrency: row.payment_currency,
+    paymentTotal: row.payment_total,
+    paymentSubtotal: row.payment_subtotal,
     failureReason: row.failure_reason,
     explorerUrl: row.tx_hash ? buildBaseScanTxUrl(row.tx_hash) : null,
     createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
     confirmedAt: row.confirmed_at?.toISOString() ?? null,
   };
 }
@@ -190,6 +218,9 @@ export async function createPendingPayment(params: {
       id,
       price_tag_code,
       tx_hash,
+      method,
+      provider,
+      provider_payment_id,
       expected_amount_raw,
       expected_amount_display,
       recipient_address,
@@ -200,6 +231,9 @@ export async function createPendingPayment(params: {
     VALUES (
       ${createPaymentId()},
       ${tag.code},
+      ${params.txHash.toLowerCase()},
+      'BASE_PAY',
+      'base',
       ${params.txHash.toLowerCase()},
       ${tag.amountRaw},
       ${tag.amountDisplay},
@@ -267,6 +301,7 @@ export async function updatePaymentStatus(params: {
       status = ${params.status},
       payer_address = ${params.payerAddress?.toLowerCase() ?? null},
       failure_reason = ${params.failureReason ?? null},
+      updated_at = NOW(),
       confirmed_at = CASE WHEN ${params.status} = 'confirmed' THEN NOW() ELSE confirmed_at END
     WHERE id = ${params.id}
     RETURNING *
@@ -309,4 +344,124 @@ export async function listPaymentsByRecipient(params: {
   `;
 
   return rows.map(mapPaymentWithTag);
+}
+
+export async function createPendingOnrampPayment(params: {
+  id?: string;
+  priceTagCode: string;
+  partnerUserRef: string;
+  onrampUrl?: string | null;
+}): Promise<PriceTagPayment> {
+  await ensureBasePriceTagSchema();
+
+  const tag = await getPriceTag(params.priceTagCode);
+
+  if (!tag) {
+    throw new Error('Price tag not found');
+  }
+
+  const rows = await getSql()<PaymentRow[]>`
+    INSERT INTO payments (
+      id,
+      price_tag_code,
+      method,
+      provider,
+      expected_amount_raw,
+      expected_amount_display,
+      recipient_address,
+      chain_id,
+      token_address,
+      status,
+      provider_status,
+      partner_user_ref,
+      onramp_url
+    )
+    VALUES (
+      ${params.id ?? createPaymentId()},
+      ${tag.code},
+      'COINBASE_ONRAMP_HOSTED',
+      'coinbase_onramp',
+      ${tag.amountRaw},
+      ${tag.amountDisplay},
+      ${tag.recipientAddress.toLowerCase()},
+      ${tag.chainId},
+      ${tag.tokenAddress.toLowerCase()},
+      'pending',
+      'created',
+      ${params.partnerUserRef},
+      ${params.onrampUrl ?? null}
+    )
+    RETURNING *
+  `;
+
+  if (!rows[0]) {
+    throw new Error('Failed to create onramp payment');
+  }
+
+  return mapPayment(rows[0]);
+}
+
+export async function updateOnrampSession(params: {
+  id: string;
+  onrampUrl: string;
+  providerStatus?: string | null;
+  providerResponse?: unknown;
+}): Promise<PriceTagPayment> {
+  await ensureBasePriceTagSchema();
+
+  const rows = await getSql()<PaymentRow[]>`
+    UPDATE payments
+    SET
+      onramp_url = ${params.onrampUrl},
+      provider_status = ${params.providerStatus ?? 'session_created'},
+      provider_response_json = ${params.providerResponse ? JSON.stringify(params.providerResponse) : null},
+      updated_at = NOW()
+    WHERE id = ${params.id}
+    RETURNING *
+  `;
+
+  if (!rows[0]) {
+    throw new Error('Payment not found');
+  }
+
+  return mapPayment(rows[0]);
+}
+
+export async function updateOnrampPaymentStatus(params: {
+  id: string;
+  status: PaymentStatus;
+  providerStatus?: string | null;
+  providerPaymentId?: string | null;
+  txHash?: `0x${string}` | null;
+  paymentCurrency?: string | null;
+  paymentTotal?: string | null;
+  paymentSubtotal?: string | null;
+  failureReason?: string | null;
+  providerResponse?: unknown;
+}): Promise<PriceTagPayment> {
+  await ensureBasePriceTagSchema();
+
+  const rows = await getSql()<PaymentRow[]>`
+    UPDATE payments
+    SET
+      status = ${params.status},
+      provider_status = ${params.providerStatus ?? null},
+      provider_payment_id = COALESCE(${params.providerPaymentId ?? null}, provider_payment_id),
+      tx_hash = COALESCE(${params.txHash?.toLowerCase() ?? null}, tx_hash),
+      payment_currency = COALESCE(${params.paymentCurrency ?? null}, payment_currency),
+      payment_total = COALESCE(${params.paymentTotal ?? null}, payment_total),
+      payment_subtotal = COALESCE(${params.paymentSubtotal ?? null}, payment_subtotal),
+      failure_reason = ${params.failureReason ?? null},
+      provider_response_json = COALESCE(${params.providerResponse ? JSON.stringify(params.providerResponse) : null}::jsonb, provider_response_json),
+      updated_at = NOW(),
+      confirmed_at = CASE WHEN ${params.status} = 'confirmed' THEN NOW() ELSE confirmed_at END
+    WHERE id = ${params.id}
+    RETURNING *
+  `;
+
+  if (!rows[0]) {
+    throw new Error('Payment not found');
+  }
+
+  return mapPayment(rows[0]);
 }
