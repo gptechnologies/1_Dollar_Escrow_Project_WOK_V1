@@ -5040,3 +5040,78 @@ body {
 .rune-chain-select:active {
   transform: translateY(1px);
 }
+
+/* Full-field native selects: every visible part, including the chevron, opens the menu. */
+.rune-chain-select,
+.rune-token {
+  position: relative;
+}
+
+.rune-chain-select-value,
+.rune-token-value {
+  pointer-events: none;
+}
+
+.rune-chain-select-value {
+  display: inline-flex !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  font: 700 12px/1 var(--font-geist-sans), system-ui, sans-serif;
+}
+
+.rune-token-value {
+  color: #fff;
+  font: 800 12px/1 var(--font-geist-sans), system-ui, sans-serif;
+}
+
+.rune-chain-select > svg,
+.rune-token > svg {
+  pointer-events: none;
+}
+
+.rune-chain-select select,
+.rune-token select,
+.rune-create-card .rune-token select,
+.rune-create-card .rune-amount-control .rune-token select {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 2;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.rune-token:focus-within {
+  border-color: rgba(187, 145, 255, .72) !important;
+  box-shadow: 0 0 0 3px rgba(154, 96, 255, .18), inset 0 1px rgba(255, 255, 255, .1) !important;
+}
+
+.rune-dash-chain-row {
+  flex: 0 0 100%;
+}
+
+.rune-dash-chain-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border: 1px solid rgba(187, 145, 255, .34);
+  border-radius: 6px;
+  background: rgba(123, 77, 219, .2);
+  color: #d3b8ff;
+  font: 750 10px/1 var(--font-geist-sans), system-ui, sans-serif;
+  letter-spacing: .02em;
+}
+
+.rune-dash-chain-tag[data-chain-id="42161"] {
+  border-color: rgba(121, 184, 255, .32);
+  background: rgba(40, 108, 207, .16);
+  color: #9ccaff;
+}

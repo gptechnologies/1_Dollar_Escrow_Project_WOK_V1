@@ -109,6 +109,9 @@ export default function EscrowLanding() {
           <label className="rune-chain-select">
             <LockKeyhole size={14} aria-hidden />
             <span className="sr-only">Escrow network</span>
+            <span className="rune-chain-select-value" aria-hidden>
+              {CHAIN_CONFIGS[selectedChainId].name}
+            </span>
             <select
               value={selectedChainId}
               onChange={(event) => setSelectedChainId(Number(event.target.value) as SupportedChainId)}

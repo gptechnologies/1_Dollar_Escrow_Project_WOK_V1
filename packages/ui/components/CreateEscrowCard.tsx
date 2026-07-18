@@ -508,6 +508,7 @@ export default function CreateEscrowCard({
                 />
                 <div className="rune-token">
                   <CircleDollarSign size={15} />
+                  <span className="rune-token-value" aria-hidden>{selectedToken}</span>
                   <select
                     id="token"
                     value={selectedToken}

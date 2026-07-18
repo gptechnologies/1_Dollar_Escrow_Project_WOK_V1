@@ -561,6 +561,11 @@ export default function EscrowCard(props: EscrowCardProps) {
         <div className="rune-dash-head-main">
           <div className="rune-dash-head-body">
             <div className="rune-dash-amount">
+              <div className="rune-dash-chain-row">
+                <span className="rune-dash-chain-tag" data-chain-id={props.chainId}>
+                  {props.chainName ?? getChainConfig(props.chainId).name}
+                </span>
+              </div>
               <small className="rune-dash-amount-label">Escrow Amount</small>
               <strong>{formatAmount(targetAmount)}</strong>
               <span className="rune-dash-token-chip">
