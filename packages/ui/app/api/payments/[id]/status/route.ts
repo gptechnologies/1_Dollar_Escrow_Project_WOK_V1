@@ -1,22 +1,7 @@
 import { NextResponse } from 'next/server';
-import { confirmPaymentAttempt } from '@/lib/base-price-tags/payment-status';
 
-export const dynamic = 'force-dynamic';
+// Payment APIs are disabled while Crow focuses on P2P escrow.
+const GONE = () =>
+  NextResponse.json({ error: 'Payments are not available.' }, { status: 410 });
 
-type RouteContext = {
-  params: Promise<{ id: string }>;
-};
-
-export async function POST(_request: Request, { params }: RouteContext) {
-  try {
-    const { id } = await params;
-
-    return NextResponse.json(await confirmPaymentAttempt(id));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to confirm payment';
-    const status = message.includes('not found') ? 404 : 400;
-
-    console.error('Payment status error:', error);
-    return NextResponse.json({ error: message }, { status });
-  }
-}
+export const GET = GONE;

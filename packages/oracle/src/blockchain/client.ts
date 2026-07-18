@@ -1,42 +1,63 @@
 import { createPublicClient, createWalletClient, http, webSocket, type PublicClient } from "viem";
-import { arbitrumSepolia, arbitrum } from "viem/chains";
+import { arbitrumSepolia, arbitrum, mainnet } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { ENV } from "../config/env.js";
+import { getNetwork } from "../config/networks.js";
 
-// Select chain based on CHAIN_ID
-const chain = ENV.CHAIN_ID === 42161 ? arbitrum : arbitrumSepolia;
-
-if (!ENV.ORACLE_PRIVATE_KEY) {
-  throw new Error("ORACLE_PRIVATE_KEY is required");
+function chainDefinition(chainId: number) {
+  if (chainId === 1) return mainnet;
+  if (chainId === 42161) return arbitrum;
+  if (chainId === 421614) return arbitrumSepolia;
+  throw new Error(`Unsupported chain ID: ${chainId}`);
 }
 
-// Oracle account
-export const oracleAccount = privateKeyToAccount(ENV.ORACLE_PRIVATE_KEY as `0x${string}`);
+const publicClients = new Map<number, PublicClient>();
+const wsClients = new Map<number, PublicClient>();
 
-// HTTP client for reads and writes
-export const publicClient = createPublicClient({
-  chain,
-  transport: http(ENV.RPC_HTTP),
-});
+export function getPublicClient(chainId: number): PublicClient {
+  const existing = publicClients.get(chainId);
+  if (existing) return existing;
+  const network = getNetwork(chainId);
+  const client = createPublicClient({
+    chain: chainDefinition(chainId),
+    transport: http(network.RPC_HTTP),
+  }) as PublicClient;
+  publicClients.set(chainId, client);
+  return client;
+}
 
-// Wallet client for signing transactions
-export const walletClient = createWalletClient({
-  account: oracleAccount,
-  chain,
-  transport: http(ENV.RPC_HTTP),
-});
+export function getWsClient(chainId: number): PublicClient {
+  const existing = wsClients.get(chainId);
+  if (existing) return existing;
+  const network = getNetwork(chainId);
+  const client = createPublicClient({
+    chain: chainDefinition(chainId),
+    transport: webSocket(network.RPC_WSS, {
+      reconnect: { attempts: 10, delay: 1000 },
+    }),
+  }) as PublicClient;
+  wsClients.set(chainId, client);
+  return client;
+}
 
-// WebSocket client for event subscriptions (Phase 5)
-export const wsClient: PublicClient = createPublicClient({
-  chain,
-  transport: webSocket(ENV.RPC_WSS, {
-    reconnect: {
-      attempts: 10,
-      delay: 1000,
-    },
-  }),
-});
+// Backward-compatible aliases for optional server-signed jobs (disabled at launch).
+export const publicClient = getPublicClient(ENV.CHAIN_ID);
+export const wsClient = getWsClient(ENV.CHAIN_ID);
 
-console.log(`✅ Blockchain clients initialized for ${chain.name}`);
-console.log(`   Oracle address: ${oracleAccount.address}`);
+export function getServerSigner() {
+  if (!ENV.ORACLE_PRIVATE_KEY) {
+    throw new Error("ORACLE_PRIVATE_KEY is required when ENABLE_SERVER_TXS=true");
+  }
 
+  const account = privateKeyToAccount(ENV.ORACLE_PRIVATE_KEY as `0x${string}`);
+  const chain = chainDefinition(ENV.CHAIN_ID);
+  const walletClient = createWalletClient({
+    account,
+    chain,
+    transport: http(ENV.RPC_HTTP),
+  });
+
+  return { account, walletClient };
+}
+
+console.log(`✅ Blockchain read clients initialized for configured networks`);

@@ -1,7 +1,7 @@
 import { sql, hexToBuffer, bufferToHex } from "../db/client.js";
 import { nanoid } from "nanoid";
 import { keccak256, toHex, toBytes } from "viem";
-import { submitTxJob } from "../blockchain/tx-queue.js";
+import { ENV } from "../config/env.js";
 
 function deriveLinkId(code: string): `0x${string}` {
   return keccak256(toHex(toBytes(code)));
@@ -46,7 +46,13 @@ async function registerLinkOnChain(
   recipient: string,
   amount: string,
 ): Promise<void> {
+  if (!ENV.ENABLE_SERVER_TXS) {
+    console.log(`ℹ️ Server-signed transactions disabled; payment link ${code} stored off-chain only.`);
+    return;
+  }
+
   try {
+    const { submitTxJob, getQueueEvents } = await import("../blockchain/tx-queue.js");
     const job = await submitTxJob("createPaymentLink", {
       linkId,
       token,
@@ -55,7 +61,7 @@ async function registerLinkOnChain(
     });
 
     job.waitUntilFinished(
-      (await import("../blockchain/tx-queue.js")).getQueueEvents(),
+      getQueueEvents(),
       120_000,
     ).then(async (result) => {
       if (result.success) {

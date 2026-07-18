@@ -9,6 +9,7 @@ import {
 
 // Max deadline window: 365 days in seconds
 const MAX_DEADLINE_WINDOW_SECONDS = 365 * 24 * 60 * 60;
+const MIN_TARGET_AMOUNT = BigInt(1_000_000); // $1 in 6 decimals
 
 /**
  * Validate Ethereum address format
@@ -44,21 +45,21 @@ function validateRequestBody(body: unknown): { valid: true; data: ValidatedBody 
     return { valid: false, error: 'targetAmount must be a numeric string' };
   }
   const targetAmount = BigInt(b.targetAmount);
-  if (targetAmount <= BigInt(0)) {
-    return { valid: false, error: 'targetAmount must be positive' };
+  if (targetAmount < MIN_TARGET_AMOUNT) {
+    return { valid: false, error: 'Minimum escrow amount is $1' };
   }
 
-  // deadline - must be a number (unix timestamp)
-  if (typeof b.deadline !== 'number' || !Number.isInteger(b.deadline)) {
-    return { valid: false, error: 'deadline must be an integer (unix timestamp)' };
+  // Single settlement date (unix timestamp)
+  if (typeof b.settlementDate !== 'number' || !Number.isInteger(b.settlementDate)) {
+    return { valid: false, error: 'settlementDate must be an integer (unix timestamp)' };
   }
 
   const now = Math.floor(Date.now() / 1000);
-  if (b.deadline <= now) {
-    return { valid: false, error: 'deadline must be in the future' };
+  if (b.settlementDate <= now) {
+    return { valid: false, error: 'settlementDate must be in the future' };
   }
-  if (b.deadline > now + MAX_DEADLINE_WINDOW_SECONDS) {
-    return { valid: false, error: 'deadline cannot be more than 365 days in the future' };
+  if (b.settlementDate > now + MAX_DEADLINE_WINDOW_SECONDS) {
+    return { valid: false, error: 'settlementDate cannot be more than 365 days in the future' };
   }
 
   // payout !== funder
@@ -66,15 +67,25 @@ function validateRequestBody(body: unknown): { valid: true; data: ValidatedBody 
     return { valid: false, error: 'payout and funder cannot be the same address' };
   }
 
-  // Optional arbitrators
-  if (b.arbitrator1 !== undefined && !isValidAddress(b.arbitrator1)) {
-    return { valid: false, error: 'Invalid arbitrator1 address' };
+  // Optional terms hash
+  if (b.termsHash !== undefined && (typeof b.termsHash !== 'string' || !/^0x[a-fA-F0-9]{64}$/.test(b.termsHash))) {
+    return { valid: false, error: 'Invalid termsHash format' };
   }
-  if (b.arbitrator2 !== undefined && !isValidAddress(b.arbitrator2)) {
-    return { valid: false, error: 'Invalid arbitrator2 address' };
+  if (b.termsText !== undefined && typeof b.termsText !== 'string') {
+    return { valid: false, error: 'termsText must be a string' };
   }
-  if (b.arbitrator2 && !b.arbitrator1) {
-    return { valid: false, error: 'arbitrator1 is required when arbitrator2 is set' };
+
+  // Optional arbitrators (0/1/3 enforced by the backend + contract)
+  const arbs = [b.arbitrator1, b.arbitrator2, b.arbitrator3];
+  for (const arb of arbs) {
+    if (arb !== undefined && !isValidAddress(arb)) {
+      return { valid: false, error: 'Invalid arbitrator address' };
+    }
+  }
+  const hasArb2 = !!b.arbitrator2;
+  const hasArb3 = !!b.arbitrator3;
+  if ((hasArb2 || hasArb3) && !(b.arbitrator1 && b.arbitrator2 && b.arbitrator3)) {
+    return { valid: false, error: 'Must have 0, 1, or 3 arbitrators (all three required if more than one)' };
   }
 
   return {
@@ -84,9 +95,12 @@ function validateRequestBody(body: unknown): { valid: true; data: ValidatedBody 
       funder: b.funder as string,
       token: b.token as string,
       targetAmount: b.targetAmount as string,
-      deadline: b.deadline as number,
+      settlementDate: b.settlementDate as number,
+      termsHash: b.termsHash as string | undefined,
+      termsText: b.termsText as string | undefined,
       arbitrator1: b.arbitrator1 as string | undefined,
       arbitrator2: b.arbitrator2 as string | undefined,
+      arbitrator3: b.arbitrator3 as string | undefined,
     },
   };
 }
@@ -96,22 +110,26 @@ interface ValidatedBody {
   funder: string;
   token: string;
   targetAmount: string;
-  deadline: number;
+  settlementDate: number;
+  termsHash?: string;
+  termsText?: string;
   arbitrator1?: string;
   arbitrator2?: string;
+  arbitrator3?: string;
 }
 
 /**
  * POST /api/escrow/create
- * Proxy to oracle API with rate limiting, validation, and idempotency
+ * Optional proxy to indexer API server-signed creation.
+ * Main product flow is wallet-direct creation plus /api/escrow/register.
  */
 export async function POST(request: NextRequest) {
-  const ORACLE_API_URL = process.env.ORACLE_API_URL;
-  const ORACLE_API_KEY = process.env.ORACLE_API_KEY;
+  const INDEXER_API_URL = process.env.INDEXER_API_URL || process.env.ORACLE_API_URL;
+  const INDEXER_API_KEY = process.env.INDEXER_API_KEY || process.env.ORACLE_API_KEY;
 
   // Validate server-side config
-  if (!ORACLE_API_URL || !ORACLE_API_KEY) {
-    console.error('Missing ORACLE_API_URL or ORACLE_API_KEY env vars');
+  if (!INDEXER_API_URL || !INDEXER_API_KEY) {
+    console.error('Missing INDEXER_API_URL/INDEXER_API_KEY or ORACLE_API_URL/ORACLE_API_KEY env vars');
     return NextResponse.json(
       { error: 'Server configuration error' },
       { status: 500 }
@@ -165,7 +183,7 @@ export async function POST(request: NextRequest) {
   const idempotencyKey = generateIdempotencyKey({
     payout: validatedBody.payout,
     funder: validatedBody.funder,
-    deadline: validatedBody.deadline,
+    deadline: validatedBody.settlementDate,
   });
 
   const idempotencyCheck = await checkIdempotency(idempotencyKey);
@@ -180,27 +198,27 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Step 4: Forward to oracle API
+  // Step 4: Forward to indexer API
   try {
-    const oracleResponse = await fetch(`${ORACLE_API_URL}/escrow/create`, {
+    const indexerResponse = await fetch(`${INDEXER_API_URL}/escrow/create`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${ORACLE_API_KEY}`,
+        'Authorization': `Bearer ${INDEXER_API_KEY}`,
       },
       body: JSON.stringify(validatedBody),
     });
 
-    const data = await oracleResponse.json();
+    const data = await indexerResponse.json();
 
     // Store successful responses for idempotency (async - uses Redis when configured)
-    if (oracleResponse.ok) {
+    if (indexerResponse.ok) {
       await storeIdempotencyResponse(idempotencyKey, data);
     }
 
     // Return with rate limit headers
     return NextResponse.json(data, { 
-      status: oracleResponse.status,
+      status: indexerResponse.status,
       headers: {
         'X-RateLimit-Remaining': String(rateLimitResult.remaining),
         'X-RateLimit-Reset': String(rateLimitResult.resetTime),
@@ -209,7 +227,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Proxy error:', error);
     return NextResponse.json(
-      { error: 'Failed to reach oracle API' },
+      { error: 'Failed to reach indexer API' },
       { status: 502 }
     );
   }

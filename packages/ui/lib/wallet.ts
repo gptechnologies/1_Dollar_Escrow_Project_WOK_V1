@@ -7,7 +7,14 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { encodeFunctionData, type Address, type Hex } from 'viem';
-import { ARBITRUM_CHAIN_ID, EscrowABI, ERC20ABI, EscrowFactoryABI, FACTORY_ADDRESS } from './chain';
+import {
+  ARBITRUM_CHAIN_ID,
+  EscrowABI,
+  ERC20ABI,
+  EscrowFactoryABI,
+  getChainConfig,
+  type SupportedChainId,
+} from './chain';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -33,7 +40,7 @@ export type WalletState = {
 
 export type WalletActions = {
   connect: () => Promise<void>;
-  switchChain: () => Promise<void>;
+  switchChain: (chainId?: SupportedChainId) => Promise<void>;
   sendTransaction: (to: Address, data: Hex) => Promise<void>;
   reset: () => void;
 };
@@ -42,7 +49,7 @@ export type WalletActions = {
 // Wallet Hook
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export function useWalletConnection(): WalletState & WalletActions {
+export function useWalletConnection(targetChainId: SupportedChainId = ARBITRUM_CHAIN_ID): WalletState & WalletActions {
   const [step, setStep] = useState<WalletStep>('idle');
   const [address, setAddress] = useState<Address | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
@@ -72,7 +79,7 @@ export function useWalletConnection(): WalletState & WalletActions {
     const handleChainChanged = (chainIdHex: unknown) => {
       const newChainId = parseInt(chainIdHex as string, 16);
       setChainId(newChainId);
-      if (newChainId !== ARBITRUM_CHAIN_ID && step === 'ready') {
+      if (newChainId !== targetChainId && step === 'ready') {
         setStep('switching');
       }
     };
@@ -84,7 +91,7 @@ export function useWalletConnection(): WalletState & WalletActions {
       window.ethereum?.removeListener('accountsChanged', handleAccountsChanged);
       window.ethereum?.removeListener('chainChanged', handleChainChanged);
     };
-  }, [step]);
+  }, [step, targetChainId]);
 
   const connect = useCallback(async () => {
     if (!window.ethereum) {
@@ -115,7 +122,7 @@ export function useWalletConnection(): WalletState & WalletActions {
       const currentChainId = parseInt(chainIdHex, 16);
       setChainId(currentChainId);
 
-      if (currentChainId === ARBITRUM_CHAIN_ID) {
+      if (currentChainId === targetChainId) {
         setStep('ready');
       } else {
         setStep('switching');
@@ -125,9 +132,9 @@ export function useWalletConnection(): WalletState & WalletActions {
       setError(message);
       setStep('error');
     }
-  }, []);
+  }, [targetChainId]);
 
-  const switchChain = useCallback(async () => {
+  const switchChain = useCallback(async (requestedChainId?: SupportedChainId) => {
     if (!window.ethereum) {
       setError('No wallet detected');
       setStep('error');
@@ -138,11 +145,13 @@ export function useWalletConnection(): WalletState & WalletActions {
       setStep('switching');
       setError(null);
 
-      // Try to switch to Arbitrum
+      const nextChainId = requestedChainId ?? targetChainId;
+      const config = getChainConfig(nextChainId);
+
       try {
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: `0x${ARBITRUM_CHAIN_ID.toString(16)}` }],
+          params: [{ chainId: `0x${nextChainId.toString(16)}` }],
         });
       } catch (switchError: unknown) {
         // If chain doesn't exist, add it
@@ -151,15 +160,15 @@ export function useWalletConnection(): WalletState & WalletActions {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
             params: [{
-              chainId: `0x${ARBITRUM_CHAIN_ID.toString(16)}`,
-              chainName: 'Arbitrum One',
+              chainId: `0x${nextChainId.toString(16)}`,
+              chainName: config.name,
               nativeCurrency: {
                 name: 'Ethereum',
                 symbol: 'ETH',
                 decimals: 18,
               },
-              rpcUrls: ['https://arb1.arbitrum.io/rpc'],
-              blockExplorerUrls: ['https://arbiscan.io'],
+              rpcUrls: [config.rpcUrl],
+              blockExplorerUrls: [config.explorerBaseUrl],
             }],
           });
         } else {
@@ -167,14 +176,14 @@ export function useWalletConnection(): WalletState & WalletActions {
         }
       }
 
-      setChainId(ARBITRUM_CHAIN_ID);
+      setChainId(nextChainId);
       setStep('ready');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to switch chain';
       setError(message);
       setStep('error');
     }
-  }, []);
+  }, [targetChainId]);
 
   const sendTransaction = useCallback(async (to: Address, data: Hex) => {
     if (!window.ethereum || !address) {
@@ -230,39 +239,70 @@ export function useWalletConnection(): WalletState & WalletActions {
 // Transaction Encoding
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Encode confirm() transaction data
- */
-export function encodeConfirmTx(): Hex {
-  return encodeFunctionData({
-    abi: EscrowABI,
-    functionName: 'confirm',
-  });
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as Address;
+const ZERO_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex;
+
+/** Encode sellerConfirm() — seller activates a fully-funded escrow. */
+export function encodeSellerConfirmTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'sellerConfirm' });
 }
 
-/**
- * Encode finalizeAfterDeadline() transaction data
- */
-export function encodeFinalizeTx(): Hex {
-  return encodeFunctionData({
-    abi: EscrowABI,
-    functionName: 'finalizeAfterDeadline',
-  });
+/** Encode settle() — 0-arb settle to seller after settlement deadline. */
+export function encodeSettleTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'settle' });
 }
 
-/**
- * Encode sweepToTreasury() transaction data
- */
-export function encodeSweepTx(): Hex {
-  return encodeFunctionData({
-    abi: EscrowABI,
-    functionName: 'sweepToTreasury',
-  });
+/** Encode refundUnderfunded() — refund an underfunded escrow after the settlement date. */
+export function encodeRefundUnderfundedTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'refundUnderfunded' });
 }
 
-/**
- * Encode ERC20 transfer(to, amount) for funding escrow.
- */
+/** Encode recoverLatePaymentToken() — return accepted-token funds sent after terminal resolution to the buyer. */
+export function encodeRecoverLatePaymentTokenTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'recoverLatePaymentToken' });
+}
+
+/** Encode approveMutualSettle() — party approves paying the seller. */
+export function encodeApproveMutualSettleTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'approveMutualSettle' });
+}
+
+/** Encode approveMutualRefund() — party approves refunding the buyer. */
+export function encodeApproveMutualRefundTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'approveMutualRefund' });
+}
+
+/** Encode finalizeMutualResolution() — execute a pending resolution after the override window. */
+export function encodeFinalizeMutualResolutionTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'finalizeMutualResolution' });
+}
+
+/** Encode arbSettle() — arbitrator votes to settle (1-arb naming). */
+export function encodeArbSettleTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'arbSettle' });
+}
+
+/** Encode arbRefund() — arbitrator votes to refund (1-arb naming). */
+export function encodeArbRefundTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'arbRefund' });
+}
+
+/** Encode arbVoteSettle() — arbitrator votes to settle (3-arb naming). */
+export function encodeArbVoteSettleTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'arbVoteSettle' });
+}
+
+/** Encode arbVoteRefund() — arbitrator votes to refund (3-arb naming). */
+export function encodeArbVoteRefundTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'arbVoteRefund' });
+}
+
+/** Encode sweepExcess() — sweep excess/late funds to treasury. */
+export function encodeSweepExcessTx(): Hex {
+  return encodeFunctionData({ abi: EscrowABI, functionName: 'sweepExcess' });
+}
+
+/** Encode ERC20 transfer(to, amount) for funding an escrow. */
 export function encodeFundEscrowTx(escrowAddress: Address, amount: bigint): Hex {
   return encodeFunctionData({
     abi: ERC20ABI,
@@ -272,19 +312,19 @@ export function encodeFundEscrowTx(escrowAddress: Address, amount: bigint): Hex 
 }
 
 /**
- * Encode EscrowFactory.createEscrowSimple(...) for wallet signing
+ * Encode EscrowFactoryV2.createEscrowSimple(...) for wallet signing.
  */
 export function encodeCreateEscrowTx(params: {
-  payout: Address;
-  funder: Address;
+  payout: Address;            // seller wallet
+  funder: Address;            // buyer / refund wallet
   token: Address;
   targetAmount: bigint;
-  deadline: number;
+  settlementDate: number;
+  termsHash?: Hex;
   arbitrator1?: Address;
   arbitrator2?: Address;
   arbitrator3?: Address;
 }): Hex {
-  const ZERO = '0x0000000000000000000000000000000000000000' as Address;
   return encodeFunctionData({
     abi: EscrowFactoryABI,
     functionName: 'createEscrowSimple',
@@ -293,10 +333,11 @@ export function encodeCreateEscrowTx(params: {
       params.funder,
       params.token,
       params.targetAmount,
-      BigInt(params.deadline),
-      params.arbitrator1 || ZERO,
-      params.arbitrator2 || ZERO,
-      params.arbitrator3 || ZERO,
+      BigInt(params.settlementDate),
+      params.termsHash || ZERO_HASH,
+      params.arbitrator1 || ZERO_ADDRESS,
+      params.arbitrator2 || ZERO_ADDRESS,
+      params.arbitrator3 || ZERO_ADDRESS,
     ],
   });
 }
@@ -353,17 +394,25 @@ function parseTransactionError(err: unknown): string {
   // Check for revert reason in error message
   const message = error.message || '';
   
-  // Common Escrow revert reasons
+  // Common EscrowV2 revert reasons
   if (message.includes('not seller')) return 'Only the seller can confirm this escrow';
-  if (message.includes('already confirmed')) return 'Escrow is already confirmed';
-  if (message.includes('confirm window closed')) return 'Confirmation window has expired';
-  if (message.includes('already terminal')) return 'Escrow has already been resolved or expired';
-  if (message.includes('not confirmed')) return 'Escrow has not been confirmed yet';
+  if (message.includes('not a party')) return 'Only the buyer or seller can do this';
+  if (message.includes('not arbitrator')) return 'Only an arbitrator can do this';
+  if (message.includes('not in created state')) return 'Escrow is no longer in the created state';
   if (message.includes('not funded')) return 'Escrow is not fully funded';
-  if (message.includes('deadline not reached')) return 'Deadline has not been reached yet';
-  if (message.includes('has arbitrators')) return 'Escrow has arbitrators - use arbitration instead';
-  if (message.includes('nothing to sweep')) return 'No funds to sweep';
-  if (message.includes('not in terminal state')) return 'Escrow must be resolved or expired first';
+  if (message.includes('settlement date not reached')) return 'The settlement date has not been reached yet';
+  if (message.includes('not resolvable')) return 'Escrow can no longer be resolved this way';
+  if (message.includes('has arbitrators')) return 'Escrow has arbitrators — resolve via arbitration or mutual agreement';
+  if (message.includes('already approved')) return 'You have already approved this action';
+  if (message.includes('already voted')) return 'This arbitrator has already voted';
+  if (message.includes('not votable')) return 'Voting is not currently open for this escrow';
+  if (message.includes('no pending resolution')) return 'There is no pending mutual resolution';
+  if (message.includes('override window open')) return 'The arbitrator override window is still open';
+  if (message.includes('no excess')) return 'There are no excess funds to sweep';
+  if (message.includes('not terminal')) return 'Escrow has not been resolved yet';
+  if (message.includes('no payment token balance')) return 'There are no funds to recover';
+  if (message.includes('use sweepExcess')) return 'Use sweep excess for the escrow token';
+  if (message.includes('Escrow: funded')) return 'Escrow is fully funded — it cannot be refunded as underfunded';
   
   // Generic error with revert reason
   if (message.includes('execution reverted')) {

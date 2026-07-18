@@ -19,7 +19,7 @@ export default function TxPageShell({ children, title }: TxPageShellProps) {
   return (
     <main className="min-h-screen relative overflow-hidden">
       {/* Lightweight branded background */}
-      <div className="fixed inset-0 -z-10 bg-[url('/clouds.png')] bg-cover bg-center bg-no-repeat" />
+      <div className="fixed inset-0 -z-10 bg-[url('/background-waves-final.png')] bg-cover bg-center bg-no-repeat" />
 
       {/* Content */}
       <div className="relative z-10 min-h-screen flex flex-col">

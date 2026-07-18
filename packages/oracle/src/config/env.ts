@@ -12,19 +12,31 @@ dotenv.config({ path: resolve(process.cwd(), "../..", envFile) });
 
 export const ENV = {
   NODE_ENV: process.env.NODE_ENV || "local",
-  CHAIN_ID: parseInt(process.env.CHAIN_ID || "421614", 10),
+  CHAIN_ID: parseInt(process.env.CHAIN_ID || "42161", 10),
   
   // RPC
   RPC_HTTP: process.env.RPC_HTTP || "",
   RPC_WSS: process.env.RPC_WSS || "",
   
-  // Oracle wallet
+  // Optional backend transaction signer. Not required for the manual P2P flow.
   ORACLE_PRIVATE_KEY: process.env.ORACLE_PRIVATE_KEY || "",
+  ENABLE_SERVER_TXS: process.env.ENABLE_SERVER_TXS === "true",
   
   // Contracts
   FACTORY_ADDRESS: process.env.FACTORY_ADDRESS || "",
   USDC_ADDRESS: process.env.USDC_ADDRESS || "",
   USDT_ADDRESS: process.env.USDT_ADDRESS || "",
+  INDEXER_START_BLOCK: process.env.INDEXER_START_BLOCK || "",
+
+  // Dual-chain production indexer. Legacy values above remain Arbitrum aliases.
+  ARBITRUM_RPC_HTTP: process.env.ARBITRUM_RPC_HTTP || process.env.RPC_HTTP || "",
+  ARBITRUM_RPC_WSS: process.env.ARBITRUM_RPC_WSS || process.env.RPC_WSS || "",
+  ARBITRUM_FACTORY_ADDRESS: process.env.ARBITRUM_FACTORY_ADDRESS || process.env.FACTORY_ADDRESS || "",
+  ARBITRUM_INDEXER_START_BLOCK: process.env.ARBITRUM_INDEXER_START_BLOCK || process.env.INDEXER_START_BLOCK || "",
+  ETHEREUM_RPC_HTTP: process.env.ETHEREUM_RPC_HTTP || "",
+  ETHEREUM_RPC_WSS: process.env.ETHEREUM_RPC_WSS || "",
+  ETHEREUM_FACTORY_ADDRESS: process.env.ETHEREUM_FACTORY_ADDRESS || "",
+  ETHEREUM_INDEXER_START_BLOCK: process.env.ETHEREUM_INDEXER_START_BLOCK || "",
   
   // Database
   POSTGRES_URL: process.env.POSTGRES_URL || "",
@@ -50,16 +62,19 @@ export const ENV = {
 // Validate required env vars
 function validateEnv() {
   const required = [
-    "CHAIN_ID",
-    "RPC_HTTP",
-    "RPC_WSS",
-    "ORACLE_PRIVATE_KEY",
-    "FACTORY_ADDRESS",
-    "USDC_ADDRESS",
+    "ARBITRUM_RPC_HTTP",
+    "ARBITRUM_RPC_WSS",
+    "ARBITRUM_FACTORY_ADDRESS",
+    "ETHEREUM_RPC_HTTP",
+    "ETHEREUM_RPC_WSS",
+    "ETHEREUM_FACTORY_ADDRESS",
     "POSTGRES_URL",
-    "REDIS_URL",
     "WEBHOOK_SHARED_SECRET",
   ];
+
+  if (ENV.ENABLE_SERVER_TXS) {
+    required.push("ORACLE_PRIVATE_KEY", "REDIS_URL");
+  }
 
   const missing = required.filter((key) => !ENV[key as keyof typeof ENV]);
   
@@ -70,4 +85,3 @@ function validateEnv() {
 }
 
 validateEnv();
-

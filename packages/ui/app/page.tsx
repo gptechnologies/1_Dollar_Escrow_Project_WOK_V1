@@ -1,5 +1,5 @@
-import HomeLanding from '@/components/home/HomeLanding';
+import EscrowLanding from '@/components/home/EscrowLanding';
 
 export default function Home() {
-  return <HomeLanding />;
+  return <EscrowLanding />;
 }

@@ -2,17 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 
 /**
  * GET /api/escrow/status/:code
- * Proxy to oracle API - keeps all oracle calls same-origin
+ * Proxy to indexer API - keeps backend calls same-origin
  */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ code: string }> }
 ) {
-  const ORACLE_API_URL = process.env.ORACLE_API_URL;
+  const INDEXER_API_URL = process.env.INDEXER_API_URL || process.env.ORACLE_API_URL;
 
   // Validate server-side config
-  if (!ORACLE_API_URL) {
-    console.error('Missing ORACLE_API_URL env var');
+  if (!INDEXER_API_URL) {
+    console.error('Missing INDEXER_API_URL or ORACLE_API_URL env var');
     return NextResponse.json(
       { error: 'Server configuration error' },
       { status: 500 }
@@ -22,8 +22,8 @@ export async function GET(
   try {
     const { code } = await params;
 
-    // Forward to oracle API (status endpoint doesn't require auth)
-    const oracleResponse = await fetch(`${ORACLE_API_URL}/escrow/status/${code}`, {
+    // Forward to indexer API (status endpoint doesn't require auth)
+    const indexerResponse = await fetch(`${INDEXER_API_URL}/escrow/status/${code}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -31,16 +31,15 @@ export async function GET(
     });
 
     // Get response data
-    const data = await oracleResponse.json();
+    const data = await indexerResponse.json();
 
-    // Return with same status code as oracle
-    return NextResponse.json(data, { status: oracleResponse.status });
+    // Return with same status code as indexer
+    return NextResponse.json(data, { status: indexerResponse.status });
   } catch (error) {
     console.error('Proxy error:', error);
     return NextResponse.json(
-      { error: 'Failed to reach oracle API' },
+      { error: 'Failed to reach indexer API' },
       { status: 502 }
     );
   }
 }
-

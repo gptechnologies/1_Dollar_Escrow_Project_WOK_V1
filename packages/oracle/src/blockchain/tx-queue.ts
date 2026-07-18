@@ -15,12 +15,11 @@ import { ENV } from "../config/env.js";
 
 export type TxMethod = 
   | "createEscrow"
-  | "confirmByOracle"
-  | "finalizeAfterDeadline"
-  | "expireIfNotConfirmed"
-  | "expireIfNotFunded"
-  | "sweepToTreasury"
-  | "sweepToTreasuryAfterArbWindow"
+  | "settle"
+  | "refundUnderfunded"
+  | "finalizeMutualResolution"
+  | "sweepExcess"
+  | "recoverLatePaymentToken"
   | "createPaymentLink";
 
 export interface TxJobData {

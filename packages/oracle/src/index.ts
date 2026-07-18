@@ -1,8 +1,8 @@
 /**
- * Escrow Oracle Service
+ * Escrow Indexer/API Service
  * Main entry point
  * 
- * Deterministic V1 - immutable parties, no refunds once funded
+ * P2P EscrowV2 - manual transactions, webhook/WSS indexing, DB lookup codes.
  */
 
 import express from "express";
@@ -10,8 +10,7 @@ import { ENV } from "./config/env.js";
 import routes from "./api/routes.js";
 import { errorHandler } from "./api/middleware.js";
 import { startWSS, startBackfill } from "./watcher/events.js";
-import { startKeeper } from "./watcher/keeper.js";
-import { startTxSender, stopTxSender, getTxSenderStatus } from "./blockchain/tx-sender.js";
+import { PRODUCTION_CHAIN_IDS, getNetwork } from "./config/networks.js";
 
 const app = express();
 
@@ -26,17 +25,20 @@ app.use(errorHandler);
 
 // Start server
 const server = app.listen(ENV.PORT, () => {
-  console.log(`\n🚀 Oracle API listening on port ${ENV.PORT}`);
+  console.log(`\n🚀 Indexer API listening on port ${ENV.PORT}`);
   console.log(`   Environment: ${ENV.NODE_ENV}`);
-  console.log(`   Chain ID: ${ENV.CHAIN_ID}`);
-  console.log(`   Factory: ${ENV.FACTORY_ADDRESS}`);
-  console.log(`   USDC: ${ENV.USDC_ADDRESS}`);
+  for (const chainId of PRODUCTION_CHAIN_IDS) {
+    const network = getNetwork(chainId);
+    console.log(`   ${network.name} (${chainId}): ${network.FACTORY}`);
+  }
   console.log(`\n📡 Available endpoints:`);
-  console.log(`   POST /escrow/create     - Create escrow with immutable payout + funder`);
+  console.log(`   POST /escrow/register   - Register wallet-created escrow tx`);
   console.log(`   GET  /escrow/status/:code - Get escrow status`);
   console.log(`   GET  /escrow/list       - List escrows from Postgres`);
+  console.log(`   POST /webhooks/chain/:chainId - Ingest chain provider logs`);
   console.log(`   GET  /health            - Health check`);
-  console.log(`\n🔐 Authentication: Bearer token required for POST endpoints`);
+  console.log(`\n🔐 Authentication: webhook secret required for /webhooks/chain`);
+  console.log(`   Server-signed transactions: ${ENV.ENABLE_SERVER_TXS ? "enabled" : "disabled"}`);
   console.log(`\n`);
 });
 
@@ -45,8 +47,10 @@ async function startWatcher() {
   console.log("🔭 Starting event watcher...\n");
   
   try {
-    await startWSS();
-    await startBackfill();
+    for (const chainId of PRODUCTION_CHAIN_IDS) {
+      await startWSS(chainId);
+      await startBackfill(chainId);
+    }
     console.log("\n✅ Event watcher started successfully\n");
   } catch (error) {
     console.error("❌ Failed to start watcher:", error);
@@ -54,29 +58,32 @@ async function startWatcher() {
   }
 }
 
-// Start keeper (periodic maintenance)
-function startKeeperLoop() {
-  console.log("🤖 Starting keeper loop...\n");
-  startKeeper();
-}
-
 // Start TX sender worker
-function startTxSenderWorker() {
-  console.log("💳 Starting TX sender worker...\n");
+let stopServerTxSender: (() => Promise<void>) | null = null;
+
+async function startTxSenderWorker() {
+  if (!ENV.ENABLE_SERVER_TXS) {
+    console.log("💳 TX sender disabled (manual transactions only)\n");
+    return;
+  }
+
+  console.log("💳 Starting optional TX sender worker...\n");
+  const { startTxSender, stopTxSender } = await import("./blockchain/tx-sender.js");
   startTxSender();
+  stopServerTxSender = stopTxSender;
 }
 
 // Initialize all background services
-startTxSenderWorker(); // Start TX sender first (needed for other services)
+startTxSenderWorker();
 startWatcher();
-startKeeperLoop();
 
 // Graceful shutdown
 async function shutdown(signal: string) {
   console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
   
-  // Stop TX sender worker
-  await stopTxSender();
+  if (stopServerTxSender) {
+    await stopServerTxSender();
+  }
   
   server.close(() => {
     console.log("✅ Server closed");

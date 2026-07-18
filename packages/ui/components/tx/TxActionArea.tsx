@@ -25,7 +25,7 @@ import {
 } from '@/lib/wallet';
 import { ARBITRUM_CHAIN_ID, getArbiscanTxUrl } from '@/lib/chain';
 import { SIMPLE_COPY } from '@/lib/copy';
-import type { EligibilityResult } from './EscrowReviewCard';
+import type { EligibilityResult } from '@/lib/escrowActions';
 
 type TxActionAreaProps = {
   escrowAddress: Address;
@@ -229,7 +229,7 @@ function WalletFlow({ wallet, escrowAddress, txData, eligibility, actionLabel }:
 
       {(step === 'switching' || (address && !isOnArbitrum)) && (
         <button
-          onClick={switchChain}
+          onClick={() => switchChain()}
           className="w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-xl bg-yellow-500 text-black font-semibold hover:bg-yellow-400 active:scale-[0.99] transition-all"
         >
           <ArrowRight className="w-5 h-5" />

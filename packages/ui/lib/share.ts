@@ -1,6 +1,37 @@
-export type ShareAction = 'confirm' | 'fund' | 'finalize';
-export type ShareRole = 'buyer' | 'seller';
+// All escrow actions a share/tx link can target.
+export type ShareAction =
+  | 'fund'
+  | 'sellerConfirm'
+  | 'settle'
+  | 'mutualSettle'
+  | 'mutualRefund'
+  | 'arbSettle'
+  | 'arbRefund'
+  | 'finalize'
+  | 'refundUnderfunded'
+  | 'recover'
+  | 'sweepExcess';
+
+export type ShareRole = 'buyer' | 'seller' | 'arbitrator';
 export type WalletTarget = 'web' | 'metamask' | 'coinbase';
+
+export const SHARE_ACTIONS: ShareAction[] = [
+  'fund',
+  'sellerConfirm',
+  'settle',
+  'mutualSettle',
+  'mutualRefund',
+  'arbSettle',
+  'arbRefund',
+  'finalize',
+  'refundUnderfunded',
+  'recover',
+  'sweepExcess',
+];
+
+export function isShareAction(value: string | undefined): value is ShareAction {
+  return !!value && (SHARE_ACTIONS as string[]).includes(value);
+}
 
 type ShareParams = {
   action: ShareAction;
@@ -49,6 +80,33 @@ export function buildWalletShareUrls(
   };
 }
 
+/**
+ * Dashboard action URL. This is the primary one-page signing surface.
+ */
+export function buildDashboardActionHref(
+  action: ShareAction,
+  escrow: string,
+  code: string,
+  role?: ShareRole,
+): string {
+  const query = new URLSearchParams();
+  query.set('action', action);
+  query.set('escrow', escrow);
+  if (code) {
+    query.set('code', code);
+    query.set('q', code);
+  } else {
+    query.set('q', escrow);
+  }
+  if (role) {
+    query.set('role', role);
+  }
+  return `/?${query.toString()}#dashboard`;
+}
+
+/**
+ * Fallback generic tx page. Dashboard actions should use buildDashboardActionHref().
+ */
 export function buildTxHref(
   action: ShareAction,
   escrow: string,
@@ -56,17 +114,11 @@ export function buildTxHref(
   role?: ShareRole,
 ): string {
   const query = new URLSearchParams();
+  query.set('action', action);
   query.set('escrow', escrow);
   query.set('code', code);
   if (role) {
     query.set('role', role);
   }
-
-  if (action === 'confirm') {
-    return `/tx/confirm?${query.toString()}`;
-  }
-  if (action === 'fund') {
-    return `/tx/fund?${query.toString()}`;
-  }
-  return `/tx/finalize?${query.toString()}`;
+  return `/tx/action?${query.toString()}`;
 }

@@ -9,8 +9,11 @@ export const CreateEscrowSchema = z.object({
   payout: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid payout address"),
   funder: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid funder address"),
   token: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address (must be USDC or USDT)"),
-  targetAmount: z.string().regex(/^\d+$/, "Must be a valid integer string"),
-  deadline: z.number().int().positive("Deadline must be a future timestamp"),
+  targetAmount: z.string().regex(/^\d+$/, "Must be a valid integer string")
+    .refine((value) => BigInt(value) >= 1_000_000n, "Minimum escrow amount is $1"),
+  settlementDate: z.number().int().positive("settlementDate must be a future timestamp"),
+  termsHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, "Invalid terms hash").optional(),
+  termsText: z.string().max(10000, "Terms text too long").optional(),
   arbitrator1: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid arbitrator1 address").optional(),
   arbitrator2: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid arbitrator2 address").optional(),
   arbitrator3: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid arbitrator3 address (deadlock arbitrator)").optional(),
@@ -33,32 +36,49 @@ export const CreateEscrowSchema = z.object({
 export interface EscrowStatusResponse {
   escrow: string;
   code: string;
-  phase: number;
-  phaseName: string;
-  payout: string;
-  funder: string;
+  status: number;       // EscrowV2 Status code (0..4)
+  statusName: string;
+  sellerWallet: string;
+  buyerRefundWallet: string;
   token: string;
   targetAmount: string;
-  fundedRecorded: string;
-  confirmationAmount: string;
-  deadline: number;
-  confirmDeadline: number;
-  arbWindowEnd: number;
+  balance: string;
+  settlementDate: number;
   createdAt: number;
-  confirmationRecorded: boolean;
-  fundingRecorded: boolean;
+  termsHash: string;
+  termsText: string | null;
   // Arbitration (0, 1, or 3 arbitrators)
   arbitrator1: string;
   arbitrator2: string;
-  arbitrator3: string;  // Deadlock arbitrator (3-arb setup only)
-  arbitratorCount: number;  // 0, 1, or 3 (never 2)
-  deadlocked: boolean;  // True if arb1 and arb2 voted differently
-  isPayable: boolean;
-  isExpirableNoConfirm: boolean;
-  isExpirableNoFund: boolean;
+  arbitrator3: string;
+  arbitrationMode: number;     // 0, 1, or 3 (never 2)
+  pendingOutcome: number;      // 0 None, 1 Settle, 2 Refund
+  overrideWindowEnd: number;
+  settleVotes: number;
+  refundVotes: number;
+  mutualSettleApprovedByBuyer: boolean;
+  mutualSettleApprovedBySeller: boolean;
+  mutualRefundApprovedByBuyer: boolean;
+  mutualRefundApprovedBySeller: boolean;
+  isFunded: boolean;
   isTerminal: boolean;
-  isInArbWindow: boolean;
-  isSweepableAfterArbWindow: boolean;
+  isActivatable: boolean;
+  isRefundableUnderfunded: boolean;
+  isSettleable: boolean;
+  isVotable: boolean;
+  isInOverrideWindow: boolean;
+  isFinalizable: boolean;
+  isPartial: boolean;
+  activity: Array<{
+    id: string;
+    timestamp: number | null;
+    role: string;
+    tone: string;
+    text: string;
+    txHash?: string;
+    blockNumber?: number;
+    logIndex?: number;
+  }>;
 }
 
 export interface CreateEscrowResponse {
@@ -66,16 +86,16 @@ export interface CreateEscrowResponse {
   code: string;
   txHash: string;
   token: string;
-  phase: number;
-  confirmDeadline: number;
+  status: number;
+  settlementDate: number;
 }
 
 export interface EscrowListItem {
   escrow: string;
   code: string;
-  phase: number;
-  phaseName: string;
-  deadline: number | null;
+  status: number;
+  statusName: string;
+  settlementDate: number | null;
   targetAmount: string | null;
   payout: string;
   funder: string;
@@ -106,7 +126,9 @@ export interface PaymentLinkResponse {
 }
 
 export const RegisterEscrowSchema = z.object({
+  chainId: z.union([z.literal(1), z.literal(42161)]),
   txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, "Invalid transaction hash"),
+  termsText: z.string().max(10000, "Terms text too long").optional(),
 });
 
 export type RegisterEscrowRequest = z.infer<typeof RegisterEscrowSchema>;

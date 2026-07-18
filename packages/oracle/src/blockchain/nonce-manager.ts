@@ -3,7 +3,7 @@
  * Ensures transactions are sent with correct nonces and handles race conditions
  */
 
-import { publicClient, oracleAccount } from "./client.js";
+import { publicClient, getServerSigner } from "./client.js";
 
 class NonceManager {
   private pendingNonce: number | null = null;
@@ -18,8 +18,9 @@ class NonceManager {
     }
 
     // Fetch from chain
+    const { account } = getServerSigner();
     const nonce = await publicClient.getTransactionCount({
-      address: oracleAccount.address,
+      address: account.address,
       blockTag: "pending",
     });
 
@@ -81,4 +82,3 @@ export async function retryWithBackoff<T>(
 
   throw new Error(`[${context}] Failed after ${maxRetries + 1} attempts: ${lastError?.message}`);
 }
-

@@ -7,71 +7,45 @@
 
 import { useState } from 'react';
 import { Copy, ExternalLink, Check, Clock, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { 
-  type EscrowState, 
-  shortenAddress, 
-  getArbiscanAddressUrl, 
+import {
+  type EscrowState,
+  EscrowOutcome,
+  shortenAddress,
+  getArbiscanAddressUrl,
   formatTokenAmount,
   formatTimestamp,
   getTimeRemaining,
 } from '@/lib/chain';
-import { derivePhaseFromFlags, getStageGuidance, StagePill, StageProgress } from '@/components/escrowStage';
+import { ACTION_META, checkEligibility, type EligibilityResult } from '@/lib/escrowActions';
+import type { ShareAction } from '@/lib/share';
+import { getStageGuidance, stageFromStatus, StagePill, StageProgress } from '@/components/escrowStage';
 
-type ActionType = 'confirm' | 'finalize' | 'sweep';
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 type EscrowReviewCardProps = {
   escrow: EscrowState;
-  action: ActionType;
+  action: ShareAction;
   connectedAddress?: string | null;
   code?: string | null;
 };
 
-type EligibilityResult = {
-  eligible: boolean;
-  reasons: string[];
-};
-
-// Action metadata
-const ACTION_INFO: Record<ActionType, { 
-  title: string; 
-  functionName: string; 
-  description: string;
-}> = {
-  confirm: {
-    title: 'Confirm Escrow',
-    functionName: 'confirm()',
-    description: 'As the seller, you are confirming your participation in this escrow.',
-  },
-  finalize: {
-    title: 'Finalize Escrow',
-    functionName: 'finalizeAfterDeadline()',
-    description: 'Release funds to the seller now that the deadline has passed.',
-  },
-  sweep: {
-    title: 'Sweep Funds',
-    functionName: 'sweepToTreasury()',
-    description: 'Sweep remaining funds to treasury after escrow termination.',
-  },
-};
-
-export default function EscrowReviewCard({ 
-  escrow, 
-  action, 
+export default function EscrowReviewCard({
+  escrow,
+  action,
   connectedAddress,
   code,
 }: EscrowReviewCardProps) {
-  const actionInfo = ACTION_INFO[action];
+  const actionInfo = ACTION_META[action];
   const eligibility = checkEligibility(escrow, action, connectedAddress);
-  const phase = derivePhaseFromFlags({
-    confirmed: escrow.confirmed,
-    isFunded: escrow.isFunded,
-    resolved: escrow.resolved,
-    expired: escrow.expired,
+  const stage = stageFromStatus(escrow.status);
+  const stageGuidance = getStageGuidance(stage, {
+    buyerAddress: escrow.buyerRefundWallet,
+    sellerAddress: escrow.sellerWallet,
   });
-  const stageGuidance = getStageGuidance(phase, {
-    buyerAddress: escrow.funder,
-    sellerAddress: escrow.payout,
-  });
+
+  const arbs = [escrow.arbitrator1, escrow.arbitrator2, escrow.arbitrator3].filter(
+    (a) => a && a.toLowerCase() !== ZERO_ADDRESS,
+  );
 
   return (
     <div className="surface-card overflow-hidden">
@@ -83,17 +57,9 @@ export default function EscrowReviewCard({
 
       {/* Escrow Details */}
       <div className="p-6 space-y-5">
-        {/* Lookup Code (primary identifier) */}
-        {code && (
-          <DetailRow 
-            label="Lookup Code"
-            value={code}
-            showCopy
-          />
-        )}
+        {code && <DetailRow label="Lookup Code" value={code} showCopy />}
 
-        {/* Escrow Address (secondary) */}
-        <DetailRow 
+        <DetailRow
           label="Escrow Address"
           value={escrow.escrow}
           isAddress
@@ -103,72 +69,93 @@ export default function EscrowReviewCard({
 
         {/* Token & Amount */}
         <div className="grid grid-cols-2 gap-4">
-          <DetailRow 
-            label="Token"
-            value={escrow.tokenSymbol}
-          />
-          <DetailRow 
+          <DetailRow label="Token" value={escrow.tokenSymbol} />
+          <DetailRow
             label="Target Amount"
             value={`${formatTokenAmount(escrow.targetAmount, escrow.tokenDecimals)} ${escrow.tokenSymbol}`}
           />
         </div>
 
         {/* Current Balance */}
-        <DetailRow 
+        <DetailRow
           label="Current Balance"
-          value={`${formatTokenAmount(escrow.escrowTokenBalance, escrow.tokenDecimals)} ${escrow.tokenSymbol}`}
+          value={`${formatTokenAmount(escrow.balance, escrow.tokenDecimals)} ${escrow.tokenSymbol}`}
           highlight={escrow.isFunded}
         />
 
-        {/* Deadlines */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <DetailRow 
-            label="Deadline"
-            value={formatTimestamp(escrow.deadline)}
-            subValue={getTimeRemaining(escrow.deadline)}
+        {/* Settlement date */}
+        <DetailRow
+          label="Settlement Date"
+          value={formatTimestamp(escrow.settlementDate)}
+          subValue={getTimeRemaining(escrow.settlementDate)}
+        />
+
+        {/* Override window (only when pending) */}
+        {escrow.overrideWindowEnd > 0 && (
+          <DetailRow
+            label="Arbitrator Override Window Ends"
+            value={formatTimestamp(escrow.overrideWindowEnd)}
+            subValue={getTimeRemaining(escrow.overrideWindowEnd)}
           />
-          <DetailRow 
-            label="Confirm Deadline"
-            value={formatTimestamp(escrow.confirmDeadline)}
-            subValue={getTimeRemaining(escrow.confirmDeadline)}
-          />
-        </div>
+        )}
 
         {/* Parties */}
         <div className="pt-2 border-t border-white/10">
           <h3 className="text-sm font-medium text-white/70 mb-3">Parties</h3>
           <div className="space-y-3">
-            <DetailRow 
-              label="Buyer (Funder)"
-              value={escrow.funder}
+            <DetailRow
+              label="Buyer (refund wallet)"
+              value={escrow.buyerRefundWallet}
               isAddress
               showCopy
               showExternalLink
-              highlight={connectedAddress?.toLowerCase() === escrow.funder.toLowerCase()}
+              highlight={connectedAddress?.toLowerCase() === escrow.buyerRefundWallet.toLowerCase()}
             />
-            <DetailRow 
-              label="Seller (Payout)"
-              value={escrow.payout}
+            <DetailRow
+              label="Seller (payout wallet)"
+              value={escrow.sellerWallet}
               isAddress
               showCopy
               showExternalLink
-              highlight={connectedAddress?.toLowerCase() === escrow.payout.toLowerCase()}
+              highlight={connectedAddress?.toLowerCase() === escrow.sellerWallet.toLowerCase()}
             />
           </div>
         </div>
 
-        {/* Status Flags */}
+        {/* Arbitrators */}
+        {arbs.length > 0 && (
+          <div className="pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70 mb-3">
+              Arbitrators ({escrow.arbitrationMode})
+            </h3>
+            <div className="space-y-3">
+              {arbs.map((arb, i) => (
+                <DetailRow
+                  key={arb}
+                  label={`Arbitrator #${i + 1}${i === 2 ? ' (tiebreaker)' : ''}`}
+                  value={arb}
+                  isAddress
+                  showCopy
+                  showExternalLink
+                  highlight={connectedAddress?.toLowerCase() === arb.toLowerCase()}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Stage */}
         <div className="pt-2 border-t border-white/10">
           <h3 className="text-sm font-medium text-white/70 mb-2">Current Stage</h3>
           <div className="flex flex-wrap items-center gap-2">
-            <StagePill phase={phase} />
-            {escrow.arbitratorCount > 0 && (
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-white/10 text-white/70">
-                {escrow.arbitratorCount} Arbitrator{escrow.arbitratorCount > 1 ? 's' : ''}
+            <StagePill stage={stage} />
+            {escrow.pendingOutcome !== EscrowOutcome.NONE && (
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-blue-500/15 text-blue-300">
+                Pending: {escrow.pendingOutcome === EscrowOutcome.SETTLE ? 'release to seller' : 'refund to buyer'}
               </span>
             )}
           </div>
-          <StageProgress phase={phase} />
+          <StageProgress stage={stage} />
           <div className="mt-3 rounded-lg bg-white/10 border border-white/15 p-3">
             <p className="text-sm text-white/90">{stageGuidance.headline}</p>
             <p className="text-xs text-white/70 mt-1">
@@ -185,7 +172,7 @@ export default function EscrowReviewCard({
           </code>
         </div>
 
-        {/* Eligibility Panel */}
+        {/* Eligibility */}
         <div className="pt-2 border-t border-white/10">
           <EligibilityPanel eligibility={eligibility} />
         </div>
@@ -208,12 +195,12 @@ type DetailRowProps = {
   highlight?: boolean;
 };
 
-function DetailRow({ 
-  label, 
-  value, 
+function DetailRow({
+  label,
+  value,
   subValue,
-  isAddress, 
-  showCopy, 
+  isAddress,
+  showCopy,
   showExternalLink,
   highlight,
 }: DetailRowProps) {
@@ -233,7 +220,7 @@ function DetailRow({
           {isAddress ? shortenAddress(value) : value}
         </span>
         {showCopy && (
-          <button 
+          <button
             onClick={handleCopy}
             className="p-1 rounded hover:bg-white/10 transition-colors"
             title="Copy to clipboard"
@@ -246,7 +233,7 @@ function DetailRow({
           </button>
         )}
         {showExternalLink && isAddress && (
-          <a 
+          <a
             href={getArbiscanAddressUrl(value)}
             target="_blank"
             rel="noopener noreferrer"
@@ -276,8 +263,8 @@ function EligibilityPanel({ eligibility }: EligibilityPanelProps) {
 
   return (
     <div className={`rounded-lg p-4 ${
-      eligible 
-        ? 'bg-[#0BB89A]/10 border border-[#0BB89A]/30' 
+      eligible
+        ? 'bg-[#0BB89A]/10 border border-[#0BB89A]/30'
         : 'bg-red-500/10 border border-red-500/30'
     }`}>
       <div className="flex items-center gap-2 mb-2">
@@ -305,105 +292,3 @@ function EligibilityPanel({ eligibility }: EligibilityPanelProps) {
     </div>
   );
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Eligibility Logic
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function checkEligibility(
-  escrow: EscrowState, 
-  action: ActionType,
-  connectedAddress?: string | null
-): EligibilityResult {
-  const reasons: string[] = [];
-  let eligible = true;
-
-  const now = Math.floor(Date.now() / 1000);
-
-  // Common terminal state check
-  if (escrow.resolved || escrow.expired) {
-    if (action !== 'sweep') {
-      reasons.push('Escrow has already been resolved or expired');
-      return { eligible: false, reasons };
-    }
-  }
-
-  switch (action) {
-    case 'confirm':
-      // Must not be confirmed
-      if (escrow.confirmed) {
-        reasons.push('Escrow is already confirmed');
-        eligible = false;
-      }
-      
-      // Must be within confirm window
-      if (now > escrow.confirmDeadline) {
-        reasons.push('Confirmation window has expired');
-        eligible = false;
-      }
-      
-      // Must be seller
-      if (connectedAddress) {
-        if (connectedAddress.toLowerCase() !== escrow.payout.toLowerCase()) {
-          reasons.push('Only the seller can confirm');
-          eligible = false;
-        } else {
-          reasons.push('Connected as seller (payout address)');
-        }
-      } else {
-        reasons.push('Connect wallet to verify you are the seller');
-        eligible = false;
-      }
-      
-      if (eligible) {
-        reasons.push('All conditions met');
-      }
-      break;
-
-    case 'finalize':
-      // Check isPayable (derived: confirmed, funded, past deadline, no arbitrators, not terminal)
-      if (escrow.isPayable) {
-        reasons.push('Escrow is payable - all conditions met');
-      } else {
-        eligible = false;
-        
-        if (!escrow.confirmed) {
-          reasons.push('Escrow has not been confirmed');
-        }
-        if (!escrow.isFunded) {
-          reasons.push('Escrow is not fully funded');
-        }
-        if (now < escrow.deadline) {
-          reasons.push('Deadline has not been reached');
-        }
-        if (escrow.arbitratorCount > 0) {
-          reasons.push('Escrow has arbitrators - use arbitration flow');
-        }
-      }
-      break;
-
-    case 'sweep':
-      // Must be terminal
-      if (!escrow.isTerminal) {
-        reasons.push('Escrow must be resolved or expired first');
-        eligible = false;
-      }
-      
-      // Must have balance
-      if (escrow.escrowTokenBalance === BigInt(0)) {
-        reasons.push('No funds to sweep');
-        eligible = false;
-      }
-      
-      if (eligible) {
-        reasons.push(`${formatTokenAmount(escrow.escrowTokenBalance, escrow.tokenDecimals)} ${escrow.tokenSymbol} available to sweep`);
-      }
-      break;
-  }
-
-  return { eligible, reasons };
-}
-
-// Export eligibility check for use in action area
-export { checkEligibility };
-export type { EligibilityResult, ActionType };

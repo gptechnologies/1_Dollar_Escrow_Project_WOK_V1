@@ -1,7 +1,7 @@
 /**
- * TX Confirm Page - Seller confirms their participation in the escrow
- * Requires: connected wallet must be the payout (seller) address
- * Contract function: confirm()
+ * Generic escrow transaction page.
+ * Handles every escrow action (fund, sellerConfirm, settle, mutual settle/refund,
+ * arbitrator votes, finalize, refunds, sweep) via ?action=<ShareAction>.
  */
 
 'use client';
@@ -9,26 +9,32 @@
 import { useSearchParams } from 'next/navigation';
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { type Address } from 'viem';
+import { AlertCircle, Loader2 } from 'lucide-react';
 import ShareModal from '@/components/ShareModal';
 import TxPageShell from '@/components/tx/TxPageShell';
-import EscrowReviewCard, { checkEligibility, type ActionType } from '@/components/tx/EscrowReviewCard';
+import EscrowReviewCard from '@/components/tx/EscrowReviewCard';
 import TxActionArea from '@/components/tx/TxActionArea';
 import { readEscrowState, isValidAddress, type EscrowState } from '@/lib/chain';
-import { encodeConfirmTx } from '@/lib/wallet';
-import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
-import { AlertCircle, Loader2 } from 'lucide-react';
+import { ACTION_META, buildActionTx, checkEligibility } from '@/lib/escrowActions';
+import { buildShareUrl, buildWalletShareUrls, isShareAction, type ShareAction, type ShareRole } from '@/lib/share';
 
-function ConfirmPageContent() {
+function ActionPageContent() {
   const searchParams = useSearchParams();
   const escrowParam = searchParams.get('escrow');
   const codeParam = searchParams.get('code');
+  const actionParam = searchParams.get('action') ?? undefined;
+  const roleParam = searchParams.get('role') ?? undefined;
+
+  const action: ShareAction = isShareAction(actionParam) ? actionParam : 'sellerConfirm';
+  const meta = ACTION_META[action];
+  const role: ShareRole | undefined =
+    roleParam === 'buyer' || roleParam === 'seller' || roleParam === 'arbitrator' ? roleParam : undefined;
 
   const [escrow, setEscrow] = useState<EscrowState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
 
-  // Load escrow state from chain
   useEffect(() => {
     async function loadEscrow() {
       if (!escrowParam) {
@@ -36,13 +42,11 @@ function ConfirmPageContent() {
         setLoading(false);
         return;
       }
-
       if (!isValidAddress(escrowParam)) {
         setError('Invalid escrow address format');
         setLoading(false);
         return;
       }
-
       try {
         setLoading(true);
         setError(null);
@@ -50,28 +54,21 @@ function ConfirmPageContent() {
         setEscrow(state);
       } catch (err) {
         console.error('Failed to load escrow:', err);
-        setError(
-          err instanceof Error 
-            ? err.message 
-            : 'Failed to load escrow data from chain'
-        );
+        setError(err instanceof Error ? err.message : 'Failed to load escrow data from chain');
       } finally {
         setLoading(false);
       }
     }
-
     loadEscrow();
   }, [escrowParam]);
 
-  // Handle address changes from wallet connection
   const handleAddressChange = useCallback((address: string | null) => {
     setConnectedAddress(address);
   }, []);
 
-  // Loading state
   if (loading) {
     return (
-      <TxPageShell title="Confirm Escrow">
+      <TxPageShell title={meta.title}>
         <div className="flex flex-col items-center justify-center py-16">
           <Loader2 className="w-8 h-8 text-[#0BB89A] animate-spin mb-4" />
           <p className="text-white/60">Loading escrow data from chain...</p>
@@ -80,10 +77,9 @@ function ConfirmPageContent() {
     );
   }
 
-  // Error state
   if (error || !escrow) {
     return (
-      <TxPageShell title="Confirm Escrow">
+      <TxPageShell title={meta.title}>
         <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6">
           <div className="flex items-center gap-3 mb-4">
             <AlertCircle className="w-6 h-6 text-red-400" />
@@ -103,91 +99,77 @@ function ConfirmPageContent() {
     );
   }
 
-  // Calculate eligibility
-  const action: ActionType = 'confirm';
   const eligibility = checkEligibility(escrow, action, connectedAddress);
-  const txData = encodeConfirmTx();
-  const confirmShareUrl = codeParam
-    ? buildShareUrl(codeParam, { action: 'confirm', role: 'seller' })
-    : null;
-  const confirmWalletUrls = codeParam
-    ? buildWalletShareUrls(codeParam, { action: 'confirm', role: 'seller' })
-    : null;
+  const { to, data } = buildActionTx(action, escrow);
+
+  const shareUrl = codeParam ? buildShareUrl(codeParam, { action, role }) : null;
+  const walletUrls = codeParam ? buildWalletShareUrls(codeParam, { action, role }) : null;
 
   return (
-    <TxPageShell title="Confirm Escrow">
+    <TxPageShell title={meta.title}>
       <div className="space-y-6">
         <div className="surface-card p-6">
           <div className="flex items-center justify-between gap-4 mb-2">
             <h3 className="text-lg font-semibold text-white">Before you sign</h3>
-            {confirmShareUrl && (
+            {shareUrl && (
               <ShareModal
-                shareUrl={confirmShareUrl}
-                walletUrls={confirmWalletUrls ?? undefined}
-                title="Share confirm link"
-                description="Send this to the seller so they can confirm escrow."
+                shareUrl={shareUrl}
+                walletUrls={walletUrls ?? undefined}
+                title={`Share ${meta.shortLabel.toLowerCase()} link`}
+                description={meta.description}
                 triggerLabel="Share"
               />
             )}
           </div>
           <ul className="space-y-2 text-sm text-white/70">
-            <li><span className="text-white font-medium">Who should sign:</span> the seller wallet only.</li>
-            <li><span className="text-white font-medium">What this does:</span> marks escrow as confirmed.</li>
-            <li><span className="text-white font-medium">What happens next:</span> buyer can fund this escrow.</li>
+            <li><span className="text-white font-medium">Who should sign:</span> {actorLabel(meta.actor)}.</li>
+            <li><span className="text-white font-medium">What this does:</span> {meta.description}</li>
           </ul>
         </div>
 
-        {/* Review Card */}
-        <EscrowReviewCard 
-          escrow={escrow} 
+        <EscrowReviewCard
+          escrow={escrow}
           action={action}
           connectedAddress={connectedAddress}
           code={codeParam}
         />
 
-        {/* Action Area */}
-        <TxActionArea 
-          escrowAddress={escrow.escrow}
-          txData={txData}
+        <TxActionArea
+          escrowAddress={to}
+          txData={data}
           eligibility={eligibility}
           onAddressChange={handleAddressChange}
-          actionLabel="Confirm escrow"
+          actionLabel={meta.title}
         />
-
-        {/* Additional Info */}
-        <div className="surface-card p-6">
-          <h3 className="text-sm font-medium text-white/70 mb-3">After confirmation</h3>
-          <ul className="space-y-2 text-sm text-white/60">
-            <li className="flex items-start gap-2">
-              <span className="text-[#0BB89A] font-bold">1.</span>
-              <span>Your confirmation is recorded on-chain</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-[#0BB89A] font-bold">2.</span>
-              <span>The buyer (funder) can now deposit funds</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-[#0BB89A] font-bold">3.</span>
-              <span>Once funded and deadline passes, you&apos;ll receive the funds</span>
-            </li>
-          </ul>
-        </div>
       </div>
     </TxPageShell>
   );
 }
 
-export default function ConfirmPage() {
+function actorLabel(actor: 'buyer' | 'seller' | 'arbitrator' | 'anyone'): string {
+  switch (actor) {
+    case 'buyer':
+      return 'the buyer wallet';
+    case 'seller':
+      return 'the seller wallet';
+    case 'arbitrator':
+      return 'an arbitrator wallet';
+    default:
+      return 'anyone (permissionless)';
+  }
+}
+
+export default function ActionPage() {
   return (
     <Suspense fallback={
-      <TxPageShell title="Confirm Escrow">
+      <TxPageShell title="Escrow Action">
         <div className="flex flex-col items-center justify-center py-16">
           <Loader2 className="w-8 h-8 text-[#0BB89A] animate-spin mb-4" />
           <p className="text-white/60">Loading...</p>
         </div>
       </TxPageShell>
     }>
-      <ConfirmPageContent />
+      <ActionPageContent />
     </Suspense>
   );
 }

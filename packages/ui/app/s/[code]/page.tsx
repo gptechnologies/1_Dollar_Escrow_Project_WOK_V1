@@ -2,18 +2,17 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowRight, ShieldCheck } from 'lucide-react';
-import { buildTxHref, resolveAppBaseUrl, type ShareAction, type ShareRole, type WalletTarget } from '@/lib/share';
-import { formatTokenAmount, formatTimestamp, shortenAddress } from '@/lib/chain';
+import { buildDashboardActionHref, isShareAction, resolveAppBaseUrl, type ShareAction, type ShareRole, type WalletTarget } from '@/lib/share';
+import { formatTokenAmount, formatTimestamp, shortenAddress, getTokenInfo } from '@/lib/chain';
 
 type EscrowSummary = {
   escrow: string;
   code: string;
-  payout: string;
-  funder: string;
-  tokenSymbol: string;
-  tokenDecimals: number;
+  sellerWallet: string;
+  buyerRefundWallet: string;
+  token: string;
   targetAmount: string;
-  deadline: number;
+  settlementDate: number;
 };
 
 type SharePageProps = {
@@ -22,18 +21,19 @@ type SharePageProps = {
 };
 
 function normalizeAction(action?: string): ShareAction {
-  if (action === 'confirm' || action === 'fund' || action === 'finalize') {
+  if (isShareAction(action)) {
     return action;
   }
-  return 'confirm';
+  return 'sellerConfirm';
 }
 
 function normalizeRole(action: ShareAction, role?: string): ShareRole | undefined {
-  if (role === 'buyer' || role === 'seller') {
+  if (role === 'buyer' || role === 'seller' || role === 'arbitrator') {
     return role;
   }
-  if (action === 'confirm') return 'seller';
+  if (action === 'sellerConfirm') return 'seller';
   if (action === 'fund') return 'buyer';
+  if (action === 'arbSettle' || action === 'arbRefund') return 'arbitrator';
   return undefined;
 }
 
@@ -52,33 +52,28 @@ function buildCoinbaseWalletDeepLink(url: string): string {
 }
 
 function getActionCopy(action: ShareAction) {
-  if (action === 'confirm') {
-    return {
-      title: 'Confirm escrow',
-      subtitle: 'Seller action',
-      cta: 'Confirm as seller',
-    };
-  }
-  if (action === 'fund') {
-    return {
-      title: 'Fund escrow',
-      subtitle: 'Buyer action',
-      cta: 'Fund escrow now',
-    };
-  }
-  return {
-    title: 'Finalize escrow',
-    subtitle: 'Release payout on deadline',
-    cta: 'Finalize escrow',
+  const copy: Record<ShareAction, { title: string; subtitle: string; cta: string }> = {
+    fund: { title: 'Fund escrow', subtitle: 'Buyer action', cta: 'Fund escrow now' },
+    sellerConfirm: { title: 'Confirm escrow', subtitle: 'Seller action', cta: 'Confirm as seller' },
+    settle: { title: 'Release escrow', subtitle: 'Release payout after the settlement date', cta: 'Release escrow' },
+    mutualSettle: { title: 'Approve release', subtitle: 'Mutual resolution', cta: 'Approve release to seller' },
+    mutualRefund: { title: 'Approve refund', subtitle: 'Mutual resolution', cta: 'Approve refund to buyer' },
+    arbSettle: { title: 'Arbitrator vote', subtitle: 'Arbitrator action', cta: 'Vote to release' },
+    arbRefund: { title: 'Arbitrator vote', subtitle: 'Arbitrator action', cta: 'Vote to refund' },
+    finalize: { title: 'Finalize resolution', subtitle: 'Execute agreed outcome', cta: 'Finalize resolution' },
+    refundUnderfunded: { title: 'Refund escrow', subtitle: 'Underfunded', cta: 'Refund to buyer' },
+    recover: { title: 'Recover funds', subtitle: 'Late payment recovery', cta: 'Recover to buyer' },
+    sweepExcess: { title: 'Sweep excess', subtitle: 'Send excess funds to treasury', cta: 'Sweep excess funds' },
   };
+  return copy[action];
 }
 
 async function fetchEscrowSummaryByCode(code: string): Promise<EscrowSummary | null> {
-  const ORACLE_API_URL = process.env.ORACLE_API_URL;
-  if (!ORACLE_API_URL) return null;
+  const INDEXER_API_URL = process.env.INDEXER_API_URL || process.env.ORACLE_API_URL;
+  if (!INDEXER_API_URL) return null;
 
   try {
-    const response = await fetch(`${ORACLE_API_URL}/escrow/status/${code}`, {
+    const response = await fetch(`${INDEXER_API_URL}/escrow/status/${code}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',
@@ -99,11 +94,12 @@ export async function generateMetadata({ params, searchParams }: SharePageProps)
   const copy = getActionCopy(action);
   const summary = await fetchEscrowSummaryByCode(code);
 
-  const tokenLine = summary
-    ? `${formatTokenAmount(BigInt(summary.targetAmount), summary.tokenDecimals)} ${summary.tokenSymbol}`
+  const tokenInfo = summary ? getTokenInfo(summary.token) : null;
+  const tokenLine = summary && tokenInfo
+    ? `${formatTokenAmount(BigInt(summary.targetAmount), tokenInfo.decimals)} ${tokenInfo.symbol}`
     : 'Escrow action';
   const description = summary
-    ? `${copy.subtitle}. ${tokenLine} before ${formatTimestamp(summary.deadline)}.`
+    ? `${copy.subtitle}. ${tokenLine} before ${formatTimestamp(summary.settlementDate)}.`
     : `${copy.subtitle}. Open Crow to review escrow details and continue.`;
 
   return {
@@ -132,23 +128,23 @@ export default async function ShareLandingPage({ params, searchParams }: SharePa
   const copy = getActionCopy(action);
   const summary = await fetchEscrowSummaryByCode(code);
 
-  const txPath = summary ? buildTxHref(action, summary.escrow, summary.code, role) : null;
+  const dashboardPath = summary ? buildDashboardActionHref(action, summary.escrow, summary.code, role) : null;
 
-  // Wallet-specific auto-redirect: build absolute tx URL then wrap in wallet deep link
-  if (walletTarget && txPath) {
+  // Wallet-specific auto-redirect: build absolute dashboard action URL then wrap in wallet deep link.
+  if (walletTarget && dashboardPath) {
     const baseUrl = resolveAppBaseUrl();
-    const fullTxUrl = `${baseUrl}${txPath}`;
+    const fullDashboardUrl = `${baseUrl}${dashboardPath}`;
 
     if (walletTarget === 'metamask') {
-      redirect(buildMetaMaskDeepLink(fullTxUrl));
+      redirect(buildMetaMaskDeepLink(fullDashboardUrl));
     }
     if (walletTarget === 'coinbase') {
-      redirect(buildCoinbaseWalletDeepLink(fullTxUrl));
+      redirect(buildCoinbaseWalletDeepLink(fullDashboardUrl));
     }
   }
 
   // Default web flow — show summary with CTA link
-  const href = txPath ?? '/';
+  const href = dashboardPath ?? '/';
 
   return (
     <main className="min-h-screen bg-[#0d0618] text-white px-4 py-16">
@@ -162,12 +158,15 @@ export default async function ShareLandingPage({ params, searchParams }: SharePa
               <p>
                 Escrow amount:{' '}
                 <span className="text-white font-medium">
-                  {formatTokenAmount(BigInt(summary.targetAmount), summary.tokenDecimals)} {summary.tokenSymbol}
+                  {(() => {
+                    const info = getTokenInfo(summary.token);
+                    return `${formatTokenAmount(BigInt(summary.targetAmount), info.decimals)} ${info.symbol}`;
+                  })()}
                 </span>
               </p>
-              <p>Deadline: <span className="text-white">{formatTimestamp(summary.deadline)}</span></p>
-              <p>Buyer: <span className="font-mono text-xs text-white/80">{shortenAddress(summary.funder)}</span></p>
-              <p>Seller: <span className="font-mono text-xs text-white/80">{shortenAddress(summary.payout)}</span></p>
+              <p>Settlement date: <span className="text-white">{formatTimestamp(summary.settlementDate)}</span></p>
+              <p>Buyer: <span className="font-mono text-xs text-white/80">{shortenAddress(summary.buyerRefundWallet)}</span></p>
+              <p>Seller: <span className="font-mono text-xs text-white/80">{shortenAddress(summary.sellerWallet)}</span></p>
               <p>Code: <span className="font-mono text-xs text-white/90">{summary.code}</span></p>
             </div>
           ) : (

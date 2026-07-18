@@ -9,6 +9,8 @@ interface DeadlineDateTimePickerProps {
   setDeadlineTime: (value: string) => void;
   error?: string;
   clearError: () => void;
+  label?: string;
+  idPrefix?: string;
 }
 
 export default function DeadlineDateTimePicker({
@@ -18,6 +20,8 @@ export default function DeadlineDateTimePicker({
   setDeadlineTime,
   error,
   clearError,
+  label = 'Payout Deadline',
+  idPrefix = 'deadline',
 }: DeadlineDateTimePickerProps) {
   const [timeDisplay, setTimeDisplay] = useState('');
 
@@ -79,17 +83,17 @@ export default function DeadlineDateTimePicker({
   return (
     <div>
       <label
-        htmlFor="deadline"
+        htmlFor={idPrefix}
         className="block text-xs font-semibold text-white/90 mb-1"
       >
-        Payout Deadline
+        {label}
       </label>
       <div className="flex gap-2">
         {/* Date Input */}
         <div className="flex-1">
           <input
             type="text"
-            id="deadline"
+            id={idPrefix}
             value={deadline}
             onChange={(e) => {
               setDeadline(formatDateForTyping(e.target.value));
@@ -109,7 +113,7 @@ export default function DeadlineDateTimePicker({
         <div className="w-24">
           <input
             type="text"
-            id="deadlineTime"
+            id={`${idPrefix}Time`}
             value={timeDisplay}
             onChange={(e) => {
               setTimeDisplay(e.target.value.toUpperCase());

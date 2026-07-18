@@ -12,7 +12,7 @@
 import { Worker, Job } from "bullmq";
 import { encodeFunctionData, parseEventLogs, formatGwei } from "viem";
 import { redisConnection } from "../watcher/queue.js";
-import { publicClient, walletClient, oracleAccount } from "./client.js";
+import { publicClient, getServerSigner } from "./client.js";
 import { EscrowFactoryABI, EscrowABI, PaymentRouterABI } from "../contracts/abis.js";
 import { getNetwork } from "../config/networks.js";
 import { ENV } from "../config/env.js";
@@ -161,7 +161,8 @@ async function sendTransaction(
           params.funder as `0x${string}`,
           params.token as `0x${string}`,
           BigInt(params.targetAmount as string),
-          BigInt(params.deadline as number),
+          BigInt(params.settlementDate as number),
+          (params.termsHash as `0x${string}`) || "0x0000000000000000000000000000000000000000000000000000000000000000",
           (params.arbitrator1 as `0x${string}`) || "0x0000000000000000000000000000000000000000",
           (params.arbitrator2 as `0x${string}`) || "0x0000000000000000000000000000000000000000",
           (params.arbitrator3 as `0x${string}`) || "0x0000000000000000000000000000000000000000",
@@ -169,58 +170,29 @@ async function sendTransaction(
       });
       break;
 
-    case "confirmByOracle":
+    case "settle":
       to = params.escrow as `0x${string}`;
-      data = encodeFunctionData({
-        abi: EscrowABI,
-        functionName: "confirmByOracle",
-        args: [params.txHash as `0x${string}`],
-      });
+      data = encodeFunctionData({ abi: EscrowABI, functionName: "settle", args: [] });
       break;
 
-    case "finalizeAfterDeadline":
+    case "refundUnderfunded":
       to = params.escrow as `0x${string}`;
-      data = encodeFunctionData({
-        abi: EscrowABI,
-        functionName: "finalizeAfterDeadline",
-        args: [],
-      });
+      data = encodeFunctionData({ abi: EscrowABI, functionName: "refundUnderfunded", args: [] });
       break;
 
-    case "expireIfNotConfirmed":
+    case "finalizeMutualResolution":
       to = params.escrow as `0x${string}`;
-      data = encodeFunctionData({
-        abi: EscrowABI,
-        functionName: "expireIfNotConfirmed",
-        args: [],
-      });
+      data = encodeFunctionData({ abi: EscrowABI, functionName: "finalizeMutualResolution", args: [] });
       break;
 
-    case "expireIfNotFunded":
+    case "sweepExcess":
       to = params.escrow as `0x${string}`;
-      data = encodeFunctionData({
-        abi: EscrowABI,
-        functionName: "expireIfNotFunded",
-        args: [],
-      });
+      data = encodeFunctionData({ abi: EscrowABI, functionName: "sweepExcess", args: [] });
       break;
 
-    case "sweepToTreasury":
+    case "recoverLatePaymentToken":
       to = params.escrow as `0x${string}`;
-      data = encodeFunctionData({
-        abi: EscrowABI,
-        functionName: "sweepToTreasury",
-        args: [],
-      });
-      break;
-
-    case "sweepToTreasuryAfterArbWindow":
-      to = params.escrow as `0x${string}`;
-      data = encodeFunctionData({
-        abi: EscrowABI,
-        functionName: "sweepToTreasuryAfterArbWindow",
-        args: [],
-      });
+      data = encodeFunctionData({ abi: EscrowABI, functionName: "recoverLatePaymentToken", args: [] });
       break;
 
     case "createPaymentLink":
@@ -248,12 +220,14 @@ async function sendTransaction(
 
   console.log(`📤 Sending TX: method=${method}, nonce=${nonce}, maxFee=${formatGwei(maxFeePerGas)} gwei`);
 
+  const { account, walletClient } = getServerSigner();
+
   // Send transaction
   const txHash = await walletClient.sendTransaction({
     to,
     data,
     nonce,
-    account: oracleAccount,
+    account,
     maxFeePerGas,
     maxPriorityFeePerGas,
   });
@@ -297,9 +271,11 @@ async function sendTransaction(
 // ============================================================================
 
 async function getNextNonce(): Promise<number> {
+  const { account } = getServerSigner();
+
   // Get nonce from chain (pending includes unconfirmed TXs)
   const chainNonce = await publicClient.getTransactionCount({
-    address: oracleAccount.address,
+    address: account.address,
     blockTag: "pending",
   });
 
@@ -356,6 +332,7 @@ async function speedUpTransaction(
   multiplier: number
 ): Promise<void> {
   try {
+    const { account, walletClient } = getServerSigner();
     const oldGasPrice = BigInt(pendingTx.gasPrice);
     const newGasPrice = (oldGasPrice * BigInt(Math.round(multiplier * 100))) / 100n;
 
@@ -363,10 +340,10 @@ async function speedUpTransaction(
 
     // Send replacement transaction (same nonce, higher gas)
     const txHash = await walletClient.sendTransaction({
-      to: oracleAccount.address, // Self-transfer as placeholder
+      to: account.address, // Self-transfer as placeholder
       value: 0n,
       nonce: pendingTx.nonce,
-      account: oracleAccount,
+      account,
       maxFeePerGas: newGasPrice,
       maxPriorityFeePerGas: newGasPrice / 2n,
     });

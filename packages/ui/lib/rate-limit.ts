@@ -61,13 +61,17 @@ export async function checkRateLimit(identifier: string): Promise<RateLimitResul
   const rateLimiter = getUpstashRateLimiter();
 
   if (rateLimiter) {
-    // Use Redis-backed rate limiter
-    const result = await rateLimiter.limit(identifier);
-    return {
-      success: result.success,
-      remaining: result.remaining,
-      resetTime: result.reset,
-    };
+    try {
+      // Use Redis-backed rate limiter
+      const result = await rateLimiter.limit(identifier);
+      return {
+        success: result.success,
+        remaining: result.remaining,
+        resetTime: result.reset,
+      };
+    } catch (error) {
+      console.error('Redis rate limit check failed; falling back to in-memory limiter:', error);
+    }
   }
 
   // Fallback to in-memory (for local dev or if Redis not configured)
@@ -137,18 +141,22 @@ export async function checkIdempotency(key: string): Promise<{ isDuplicate: bool
   const redis = getRedis();
 
   if (redis) {
-    // Use Redis
-    const cached = await redis.get<string>(`idempotency:${key}`);
-    if (cached) {
-      try {
-        const response = JSON.parse(cached);
-        return { isDuplicate: true, cachedResponse: response };
-      } catch {
-        // Invalid JSON, treat as not cached
-        return { isDuplicate: false };
+    try {
+      // Use Redis
+      const cached = await redis.get<string>(`idempotency:${key}`);
+      if (cached) {
+        try {
+          const response = JSON.parse(cached);
+          return { isDuplicate: true, cachedResponse: response };
+        } catch {
+          // Invalid JSON, treat as not cached
+          return { isDuplicate: false };
+        }
       }
+      return { isDuplicate: false };
+    } catch (error) {
+      console.error('Redis idempotency check failed; falling back to in-memory cache:', error);
     }
-    return { isDuplicate: false };
   }
 
   // Fallback to in-memory
@@ -181,11 +189,15 @@ export async function storeIdempotencyResponse(key: string, response: unknown): 
   const redis = getRedis();
 
   if (redis) {
-    // Use Redis with TTL
-    await redis.set(`idempotency:${key}`, JSON.stringify(response), {
-      ex: IDEMPOTENCY_TTL_SECONDS,
-    });
-    return;
+    try {
+      // Use Redis with TTL
+      await redis.set(`idempotency:${key}`, JSON.stringify(response), {
+        ex: IDEMPOTENCY_TTL_SECONDS,
+      });
+      return;
+    } catch (error) {
+      console.error('Redis idempotency store failed; falling back to in-memory cache:', error);
+    }
   }
 
   // Fallback to in-memory

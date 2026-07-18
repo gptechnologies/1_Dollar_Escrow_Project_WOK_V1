@@ -1,13 +1,6 @@
-import type { Metadata } from 'next';
-import MyTagsClient from '@/components/base-price-tags/MyTagsClient';
-import { getBasePriceTagPublicConfig } from '@/lib/base-price-tags/config';
+import { redirect } from 'next/navigation';
 
-export const metadata: Metadata = {
-  title: 'My Price Tags',
-  description: 'View Base USDC price tags that pay to your connected wallet.',
-};
-
+// Price-tag surfaces are hidden while Crow focuses on P2P escrow.
 export default function MyTagsPage() {
-  return <MyTagsClient chain={getBasePriceTagPublicConfig()} />;
+  redirect('/');
 }
-

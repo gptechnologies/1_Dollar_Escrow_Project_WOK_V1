@@ -1,24 +1,17 @@
 /**
- * Event watcher - WSS subscriptions + HTTP backfill (Hybrid Confirmation Model)
- * 
- * Key changes from V1:
- * - No longer triggers recordFunding() - funding is derived from balance
- * - Detects bond transfers and triggers confirmByOracle()
- * - Watches for new escrow events: ConfirmedBySeller, ConfirmedByOracle, SweptAfterArbWindow
+ * Event watcher - WSS subscriptions + HTTP backfill for EscrowV2.
+ *
+ * Funding is push-based: deposits are ERC-20 Transfer logs to escrow addresses.
+ * The watcher indexes factory-created escrows, escrow action events, and token
+ * transfers for dashboard lookup/history. It does not submit funding txs.
  */
 
-import { parseEventLogs, Log } from "viem";
-import { wsClient, publicClient } from "../blockchain/client.js";
+import { getWsClient, getPublicClient } from "../blockchain/client.js";
 import { EscrowFactoryABI, EscrowABI, ERC20ABI } from "../contracts/abis.js";
 import { getNetwork } from "../config/networks.js";
-import { ENV } from "../config/env.js";
 import { sql, hexToBuffer, bufferToHex } from "../db/client.js";
 import { upsertEscrowFromEvent } from "../services/escrow.js";
-import { getEscrowQueue, createEscrowWorker } from "./queue.js";
-import { processEscrowJob } from "./processor.js";
-import { Worker } from "bullmq";
-
-const network = getNetwork(ENV.CHAIN_ID);
+import { decodeEventLog } from "viem";
 
 // Reorg safety buffer - re-scan this many blocks on backfill to handle reorgs
 // 64 blocks is safe for Arbitrum (~1 minute of blocks)
@@ -34,80 +27,254 @@ const INITIAL_BACKOFF_MS = 1000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Active escrow addresses we're watching
-const activeEscrows = new Set<string>();
-const activeWorkers = new Map<string, Worker>();
+const activeEscrows = new Map<number, Set<string>>();
+const activeUnwatchers = new Map<string, Array<() => void>>();
+
+function chainEscrows(chainId: number): Set<string> {
+  const existing = activeEscrows.get(chainId);
+  if (existing) return existing;
+  const created = new Set<string>();
+  activeEscrows.set(chainId, created);
+  return created;
+}
+
+const escrowKey = (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`;
+
+const ESCROW_EVENT_NAMES = [
+  "SellerConfirmed",
+  "Settled",
+  "Refunded",
+  "UnderfundedRefunded",
+  "MutualSettleApproved",
+  "MutualRefundApproved",
+  "MutualResolutionPending",
+  "MutualResolutionFinalized",
+  "ArbitratorVoted",
+  "SweptExcess",
+  "SweptStrayToken",
+  "LatePaymentTokenRecovered",
+] as const;
+
+function escrowEventAbi(eventName: string) {
+  const event = EscrowABI.find((entry: any) => entry.type === "event" && entry.name === eventName);
+  if (!event) {
+    throw new Error(`Escrow ABI event not found: ${eventName}`);
+  }
+  return event as any;
+}
+
+function jsonSafe(value: any): any {
+  if (typeof value === "bigint") return value.toString();
+  if (Array.isArray(value)) return value.map(jsonSafe);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, jsonSafe(val)]));
+  }
+  return value;
+}
 
 /**
  * Initialize active escrow set from database
  */
-async function loadActiveEscrows() {
+async function loadActiveEscrows(chainId: number) {
   const rows = await sql`
     SELECT escrow FROM escrows
-    WHERE network = ${ENV.CHAIN_ID.toString()}
+    WHERE network = ${chainId.toString()}
     AND phase_cached < 3
   `;
 
   rows.forEach((row) => {
     const addr = bufferToHex(row.escrow as Buffer).toLowerCase();
-    activeEscrows.add(addr);
+    chainEscrows(chainId).add(addr);
   });
 
-  console.log(`📊 Loaded ${activeEscrows.size} active escrows`);
+  console.log(`📊 Loaded ${chainEscrows(chainId).size} active escrows on chain ${chainId}`);
 }
 
 /**
  * Add escrow to active set
  */
-export function addActiveEscrow(address: string) {
+export function addActiveEscrow(chainId: number, address: string, tokenAddress?: string) {
   const addr = address.toLowerCase();
-  if (!activeEscrows.has(addr)) {
-    activeEscrows.add(addr);
-    
-    // Start worker
-    if (!activeWorkers.has(addr)) {
-      console.log(`👷 Starting worker for ${addr}`);
-      const worker = createEscrowWorker(addr, processEscrowJob);
-      activeWorkers.set(addr, worker);
-    }
+  if (!chainEscrows(chainId).has(addr)) {
+    chainEscrows(chainId).add(addr);
   }
+
+  void startEscrowSubscriptions(chainId, addr, tokenAddress);
 }
 
 /**
  * Remove escrow from active set (when resolved/expired)
  */
-export function removeActiveEscrow(address: string) {
+export function removeActiveEscrow(chainId: number, address: string) {
   const addr = address.toLowerCase();
-  activeEscrows.delete(addr);
+  chainEscrows(chainId).delete(addr);
 
-  // Stop worker
-  const worker = activeWorkers.get(addr);
-  if (worker) {
-    console.log(`🛑 Stopping worker for ${addr}`);
-    worker.close();
-    activeWorkers.delete(addr);
+  const key = escrowKey(chainId, addr);
+  const unwatchers = activeUnwatchers.get(key);
+  if (unwatchers) {
+    console.log(`🛑 Stopping event subscriptions for ${addr}`);
+    for (const unwatch of unwatchers) {
+      unwatch();
+    }
+    activeUnwatchers.delete(key);
   }
 }
 
 /**
- * Check if transaction was already processed
+ * Check if log was already processed
  */
-async function isProcessed(txHash: string, escrow: string): Promise<boolean> {
+async function isProcessed(chainId: number, txHash: string, logIndex: number): Promise<boolean> {
   const rows = await sql`
-    SELECT 1 FROM processed_tx
-    WHERE tx_hash = ${txHash} AND escrow = ${hexToBuffer(escrow)}
+    SELECT 1 FROM processed_logs
+    WHERE network = ${chainId.toString()}
+    AND tx_hash = ${txHash}
+    AND log_index = ${logIndex}
   `;
   return rows.length > 0;
 }
 
 /**
- * Mark transaction as processed
+ * Mark log as processed
  */
-async function markProcessed(txHash: string, escrow: string, eventType: string) {
+async function markProcessed(chainId: number, txHash: string, logIndex: number, escrow: string, eventType: string) {
   await sql`
-    INSERT INTO processed_tx (tx_hash, escrow, event_type)
-    VALUES (${txHash}, ${hexToBuffer(escrow)}, ${eventType})
-    ON CONFLICT (tx_hash, escrow) DO NOTHING
+    INSERT INTO processed_logs (network, tx_hash, log_index, escrow, event_type)
+    VALUES (${chainId.toString()}, ${txHash}, ${logIndex}, ${hexToBuffer(escrow)}, ${eventType})
+    ON CONFLICT (network, tx_hash, log_index) DO NOTHING
   `;
+}
+
+async function getEscrowToken(chainId: number, escrowAddress: string): Promise<string | null> {
+  const rows = await sql`
+    SELECT token FROM escrows
+    WHERE network = ${chainId.toString()}
+    AND escrow = ${hexToBuffer(escrowAddress)}
+    LIMIT 1
+  `;
+  if (rows.length === 0 || !rows[0].token) return null;
+  return bufferToHex(rows[0].token as Buffer).toLowerCase();
+}
+
+async function isKnownEscrow(chainId: number, escrowAddress: string): Promise<boolean> {
+  const rows = await sql`
+    SELECT 1 FROM escrows
+    WHERE network = ${chainId.toString()}
+    AND escrow = ${hexToBuffer(escrowAddress)}
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
+async function recordEscrowEvent(chainId: number, log: any, eventName: string) {
+  const escrowAddress = (log.address as string).toLowerCase();
+  const args = log.args ?? {};
+  const actor =
+    args.seller ??
+    args.buyerRefundWallet ??
+    args.approver ??
+    args.arbitrator ??
+    args.treasury ??
+    args.erc20 ??
+    null;
+  const amount =
+    args.amount?.toString?.() ??
+    args.principal?.toString?.() ??
+    args.value?.toString?.() ??
+    null;
+  const outcome = args.outcome === undefined ? null : Number(args.outcome);
+
+  await sql`
+    INSERT INTO escrow_events (
+      network, escrow, event_name, tx_hash, block_number, log_index,
+      actor, amount, outcome, raw_args
+    )
+    VALUES (
+      ${chainId.toString()},
+      ${hexToBuffer(escrowAddress)},
+      ${eventName},
+      ${log.transactionHash},
+      ${log.blockNumber.toString()},
+      ${Number(log.logIndex)},
+      ${actor ? hexToBuffer(actor as string) : null},
+      ${amount},
+      ${outcome},
+      ${sql.json(jsonSafe(args))}
+    )
+    ON CONFLICT (network, tx_hash, log_index) DO NOTHING
+  `;
+}
+
+async function recordTokenTransfer(chainId: number, log: any, escrowAddress: string) {
+  const { from, to, value } = log.args;
+  await sql`
+    INSERT INTO escrow_token_transfers (
+      network, token, escrow, from_address, to_address, amount,
+      tx_hash, block_number, log_index
+    )
+    VALUES (
+      ${chainId.toString()},
+      ${hexToBuffer(log.address as string)},
+      ${hexToBuffer(escrowAddress)},
+      ${hexToBuffer(from as string)},
+      ${hexToBuffer(to as string)},
+      ${value.toString()},
+      ${log.transactionHash},
+      ${log.blockNumber.toString()},
+      ${Number(log.logIndex)}
+    )
+    ON CONFLICT (network, tx_hash, log_index) DO NOTHING
+  `;
+}
+
+async function startEscrowSubscriptions(chainId: number, escrowAddress: string, tokenAddress?: string) {
+  const addr = escrowAddress.toLowerCase();
+  const key = escrowKey(chainId, addr);
+  if (activeUnwatchers.has(key)) return;
+
+  const token = (tokenAddress ?? await getEscrowToken(chainId, addr))?.toLowerCase();
+  const wsClient = getWsClient(chainId);
+  const unwatchers: Array<() => void> = [];
+
+  for (const eventName of ESCROW_EVENT_NAMES) {
+    const event = escrowEventAbi(eventName);
+    const unwatch = wsClient.watchEvent({
+      address: addr as `0x${string}`,
+      event: {
+        type: "event",
+        name: event.name,
+        inputs: event.inputs,
+      },
+      onLogs: async (logs) => {
+        for (const log of logs) {
+          await handleEscrowEvent(chainId, log, eventName);
+        }
+      },
+      onError: (error) => {
+        console.error(`❌ WSS ${eventName} error for ${addr}:`, error);
+      },
+    });
+    unwatchers.push(unwatch);
+  }
+
+  if (token) {
+    const unwatchTransfer = wsClient.watchEvent({
+      address: token as `0x${string}`,
+      event: ERC20ABI[0],
+      args: { to: addr as `0x${string}` },
+      onLogs: async (logs) => {
+        for (const log of logs) {
+          await handleTokenTransfer(chainId, log, addr);
+        }
+      },
+      onError: (error) => {
+        console.error(`❌ WSS Transfer error for ${addr}:`, error);
+      },
+    });
+    unwatchers.push(unwatchTransfer);
+  }
+
+  activeUnwatchers.set(key, unwatchers);
+  console.log(`✅ Subscribed to ${unwatchers.length} event streams for ${addr}`);
 }
 
 /**
@@ -115,7 +282,7 @@ async function markProcessed(txHash: string, escrow: string, eventType: string) 
  * Activates the escrow worker AND persists it in the DB if not already indexed
  * (safety net for escrows created outside the UI register flow).
  */
-async function handleEscrowCreated(log: any) {
+async function handleEscrowCreated(chainId: number, log: any) {
   const escrowAddress = (log.args.escrow as string).toLowerCase();
   
   console.log(`🆕 EscrowCreated: ${escrowAddress}`);
@@ -124,14 +291,14 @@ async function handleEscrowCreated(log: any) {
   try {
     const event = log.args;
     const { code, isNew } = await upsertEscrowFromEvent({
+      chainId,
       escrowAddress,
       payout: event.payout as string,
       funder: event.funder as string,
       tokenAddress: event.token as string,
       targetAmount: event.targetAmount.toString(),
-      deadline: Number(event.deadline),
-      confirmDeadline: Number(event.confirmDeadline),
-      arbWindowEnd: Number(event.arbWindowEnd),
+      settlementDate: Number(event.settlementDate),
+      termsHash: event.termsHash as string,
       arbitrator1: event.arbitrator1 as string,
       arbitrator2: event.arbitrator2 as string,
       arbitrator3: event.arbitrator3 as string,
@@ -145,104 +312,179 @@ async function handleEscrowCreated(log: any) {
     console.error(`⚠️ Failed to upsert escrow ${escrowAddress} from watcher:`, err);
   }
 
-  addActiveEscrow(escrowAddress);
+  addActiveEscrow(chainId, escrowAddress, log.args.token as string);
 }
 
 /**
  * Process Token Transfer events to active escrows
- * In hybrid model, this is used for bond detection (confirmation), not funding
+ * Funding is push-based, so transfers are indexed as funding/deposit activity.
  */
-async function handleTokenTransfer(log: any, escrowAddress: string) {
+async function handleTokenTransfer(chainId: number, log: any, escrowAddress: string) {
   const { from, to, value } = log.args;
   
-  if (await isProcessed(log.transactionHash, escrowAddress)) {
-    console.log(`⏭️  Already processed: ${log.transactionHash}`);
+  if (await isProcessed(chainId, log.transactionHash, Number(log.logIndex))) {
+    console.log(`⏭️  Already processed: ${log.transactionHash}:${log.logIndex}`);
     return;
   }
 
   console.log(`💸 Transfer to ${escrowAddress}: ${value.toString()} from ${from}`);
+  await recordTokenTransfer(chainId, log, escrowAddress);
 
-  // Queue job to check if this needs processing (bond detection)
-  const queue = getEscrowQueue(escrowAddress);
-  await queue.add("transfer", {
-    escrow: escrowAddress,
-    eventType: "Transfer",
-    txHash: log.transactionHash,
-    blockNumber: log.blockNumber,
-    logIndex: log.logIndex,
-    args: { from, to, value: value.toString() },
-  });
-
-  await markProcessed(log.transactionHash, escrowAddress, "Transfer");
+  await markProcessed(chainId, log.transactionHash, Number(log.logIndex), escrowAddress, "Transfer");
 }
 
 /**
- * Process Escrow events (Hybrid Confirmation Model)
- * Handles: ConfirmedBySeller, ConfirmedByOracle, FinalizedPaid, ResolvedReleased,
- *          ResolvedRefunded, ExpiredNotConfirmed, ExpiredNotFunded, SweptAfterArbWindow
+ * Process Escrow events.
  */
-async function handleEscrowEvent(log: any, eventName: string) {
+async function handleEscrowEvent(chainId: number, log: any, eventName: string) {
   const escrowAddress = (log.address as string).toLowerCase();
   
-  if (await isProcessed(log.transactionHash, escrowAddress)) {
-    console.log(`⏭️  Already processed: ${log.transactionHash}`);
+  if (await isProcessed(chainId, log.transactionHash, Number(log.logIndex))) {
+    console.log(`⏭️  Already processed: ${log.transactionHash}:${log.logIndex}`);
     return;
   }
 
   console.log(`📢 ${eventName} on ${escrowAddress}`);
+  await recordEscrowEvent(chainId, log, eventName);
 
-  // Phase mapping for DB update (synthetic phase for backward compatibility)
-  // Phase 0: AwaitingConfirmation (not confirmed)
-  // Phase 1: ConfirmedAwaitingFunding (confirmed but not isFunded)
-  // Phase 2: Funded (confirmed and isFunded)
-  // Phase 3: Resolved
-  // Phase 4: Expired
-  const phaseMap: Record<string, number> = {
-    // Confirmation events -> phase 1 (but funding status is derived, so UI should check isFunded)
-    "ConfirmedBySeller": 1,
-    "ConfirmedByOracle": 1,
-    // Terminal events -> phase 3 (resolved) or 4 (expired)
-    "FinalizedPaid": 3,
-    "ResolvedReleased": 3,
-    "ResolvedRefunded": 3,
-    "SweptAfterArbWindow": 3,
-    "ExpiredNotConfirmed": 4,
-    "ExpiredNotFunded": 4,
+  // Status mapping (mirrors the EscrowV2 Status enum)
+  //   0 CREATED, 1 ACTIVE, 2 PENDING_MUTUAL_RESOLUTION, 3 SETTLED, 4 REFUNDED
+  // Note: mutual-resolution finalize and arbitrator overrides ultimately emit
+  // Settled/Refunded via the internal payout helpers, so those terminal states
+  // are caught here. status >= 3 is terminal.
+  const statusMap: Record<string, number> = {
+    "SellerConfirmed": 1,
+    "MutualResolutionPending": 2,
+    "Settled": 3,
+    "Refunded": 4,
+    "UnderfundedRefunded": 4,
   };
 
-  if (eventName in phaseMap) {
-    const newPhase = phaseMap[eventName];
+  if (eventName in statusMap) {
+    const newStatus = statusMap[eventName];
     await sql`
       UPDATE escrows
-      SET phase_cached = ${newPhase}, updated_at = NOW()
-      WHERE escrow = ${hexToBuffer(escrowAddress)}
+      SET phase_cached = ${newStatus}, updated_at = NOW()
+      WHERE network = ${chainId.toString()}
+      AND escrow = ${hexToBuffer(escrowAddress)}
     `;
 
     // Remove from active set if terminal
-    if (newPhase >= 3) {
-      removeActiveEscrow(escrowAddress);
+    if (newStatus >= 3) {
+      removeActiveEscrow(chainId, escrowAddress);
     }
   }
 
-  await markProcessed(log.transactionHash, escrowAddress, eventName);
+  await markProcessed(chainId, log.transactionHash, Number(log.logIndex), escrowAddress, eventName);
+}
+
+function normalizeWebhookLogs(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.logs)) return payload.logs;
+  if (Array.isArray(payload?.event?.data?.block?.logs)) return payload.event.data.block.logs;
+  if (Array.isArray(payload?.event?.data?.logs)) return payload.event.data.logs;
+  return [];
+}
+
+function normalizeRawLog(raw: any): any {
+  return {
+    address: String(raw.address ?? "").toLowerCase(),
+    data: raw.data,
+    topics: raw.topics,
+    transactionHash: raw.transactionHash ?? raw.transaction?.hash,
+    blockNumber: BigInt(raw.blockNumber ?? raw.block?.number ?? 0),
+    logIndex: Number(raw.logIndex ?? raw.index ?? 0),
+  };
+}
+
+function decodeKnownEvent(rawLog: any): { eventName: string; args: any } | null {
+  for (const abi of [EscrowFactoryABI, EscrowABI, ERC20ABI]) {
+    try {
+      const decoded = decodeEventLog({
+        abi,
+        data: rawLog.data,
+        topics: rawLog.topics,
+      });
+      return {
+        eventName: decoded.eventName,
+        args: decoded.args,
+      };
+    } catch {
+      // Try next ABI.
+    }
+  }
+  return null;
+}
+
+/**
+ * Process logs delivered by a chain webhook provider.
+ * Supports payloads with either a top-level `logs` array or Alchemy-style
+ * `event.data.block.logs`.
+ */
+export async function processWebhookLogs(chainId: number, payload: any): Promise<{ processed: number; ignored: number }> {
+  const network = getNetwork(chainId);
+  const rawLogs = normalizeWebhookLogs(payload);
+  let processed = 0;
+  let ignored = 0;
+
+  for (const raw of rawLogs) {
+    const log = normalizeRawLog(raw);
+    if (!log.address || !log.transactionHash || !Array.isArray(log.topics)) {
+      ignored++;
+      continue;
+    }
+
+    const decoded = decodeKnownEvent(log);
+    if (!decoded) {
+      ignored++;
+      continue;
+    }
+
+    const decodedLog = { ...log, args: decoded.args };
+    const eventName = decoded.eventName;
+
+    if (log.address === network.FACTORY.toLowerCase() && eventName === "EscrowCreated") {
+      await handleEscrowCreated(chainId, decodedLog);
+      processed++;
+      continue;
+    }
+
+    if (eventName === "Transfer") {
+      const to = String((decoded.args as any).to ?? "").toLowerCase();
+      if (to && await isKnownEscrow(chainId, to)) {
+        await handleTokenTransfer(chainId, decodedLog, to);
+        processed++;
+      } else {
+        ignored++;
+      }
+      continue;
+    }
+
+    if (ESCROW_EVENT_NAMES.includes(eventName as any) && await isKnownEscrow(chainId, log.address)) {
+      await handleEscrowEvent(chainId, decodedLog, eventName);
+      processed++;
+      continue;
+    }
+
+    ignored++;
+  }
+
+  return { processed, ignored };
 }
 
 /**
  * Start WebSocket subscriptions
  */
-export async function startWSS() {
-  await loadActiveEscrows();
+export async function startWSS(chainId: number) {
+  const network = getNetwork(chainId);
+  const wsClient = getWsClient(chainId);
+  await loadActiveEscrows(chainId);
 
-  // Start workers for all initial active escrows
-  for (const escrow of activeEscrows) {
-    if (!activeWorkers.has(escrow)) {
-      console.log(`👷 Starting worker for ${escrow}`);
-      const worker = createEscrowWorker(escrow, processEscrowJob);
-      activeWorkers.set(escrow, worker);
-    }
+  for (const escrow of chainEscrows(chainId)) {
+    await startEscrowSubscriptions(chainId, escrow);
   }
 
-  console.log(`✅ Started ${activeWorkers.size} workers`);
+  console.log(`✅ Loaded ${chainEscrows(chainId).size} active escrow subscriptions on ${network.name}`);
 
   console.log("🔌 Starting WebSocket subscriptions...");
 
@@ -256,7 +498,7 @@ export async function startWSS() {
     },
     onLogs: async (logs) => {
       for (const log of logs) {
-        await handleEscrowCreated(log);
+        await handleEscrowCreated(chainId, log);
       }
     },
     onError: (error) => {
@@ -264,11 +506,7 @@ export async function startWSS() {
     },
   });
 
-  // Note: Token transfers to escrows are detected by the keeper's reconciliation loop
-  // which does targeted per-escrow log queries. This avoids the complexity of
-  // subscribing to all possible escrow addresses.
-  
-  console.log("✅ WSS subscriptions active (hybrid confirmation model)");
+  console.log("✅ WSS subscriptions active (factory, escrow actions, and token transfers)");
 }
 
 /**
@@ -278,19 +516,25 @@ export async function startWSS() {
  * to recover if the oracle goes down. Transfer events are handled by the
  * keeper's reconciliation loop which does per-escrow queries.
  */
-export async function startBackfill() {
-  console.log(`🔄 Starting backfill check...`);
+export async function startBackfill(chainId: number) {
+  const network = getNetwork(chainId);
+  const publicClient = getPublicClient(chainId);
+  console.log(`🔄 Starting ${network.name} backfill check...`);
   
   try {
     // Get cursor (last processed block)
     const cursorRows = await sql`
-      SELECT last_block FROM cursor WHERE network = ${ENV.CHAIN_ID.toString()}
+      SELECT last_block FROM cursor WHERE network = ${chainId.toString()}
     `;
     
-    const lastBlock = cursorRows.length > 0 ? BigInt(cursorRows[0].last_block) : 0n;
+    const storedLastBlock = cursorRows.length > 0 ? BigInt(cursorRows[0].last_block) : 0n;
     const latestBlock = await publicClient.getBlockNumber();
+    const configuredStartBlock = network.indexerStartBlock ? BigInt(network.indexerStartBlock) : 0n;
+    const lastBlock = storedLastBlock === 0n
+      ? (configuredStartBlock > 0n ? configuredStartBlock - 1n : latestBlock)
+      : storedLastBlock;
     
-    console.log(`📊 Cursor at block ${lastBlock}, latest block ${latestBlock}`);
+    console.log(`📊 Cursor at block ${storedLastBlock}, effective start ${lastBlock}, latest block ${latestBlock}`);
     
     // Calculate safe start block with reorg buffer
     // This re-scans recent blocks to catch any events that might have been reorged
@@ -302,7 +546,7 @@ export async function startBackfill() {
     let lastSuccessfulBlock = safeStartBlock;
     
     // If we're behind, backfill EscrowCreated events
-    if (lastBlock > 0 && latestBlock > safeStartBlock) {
+    if (latestBlock > safeStartBlock) {
       const gap = latestBlock - safeStartBlock;
       console.log(`📥 Backfilling ${gap} blocks of EscrowCreated events (with ${REORG_BUFFER_BLOCKS} block reorg buffer)...`);
       console.log(`   Using chunk size of ${CHUNK_SIZE} blocks (Alchemy free tier limit)`);
@@ -329,7 +573,7 @@ export async function startBackfill() {
             });
             
             for (const log of logs) {
-              await handleEscrowCreated(log);
+              await handleEscrowCreated(chainId, log);
             }
             
             console.log(`   Processed blocks ${fromBlock}-${toBlock}, found ${logs.length} EscrowCreated events`);
@@ -376,7 +620,7 @@ export async function startBackfill() {
     if (lastSuccessfulBlock > safeStartBlock) {
       await sql`
         INSERT INTO cursor (network, last_block, updated_at)
-        VALUES (${ENV.CHAIN_ID.toString()}, ${lastSuccessfulBlock.toString()}, NOW())
+        VALUES (${chainId.toString()}, ${lastSuccessfulBlock.toString()}, NOW())
         ON CONFLICT (network) DO UPDATE SET last_block = ${lastSuccessfulBlock.toString()}, updated_at = NOW()
       `;
       console.log(`✅ Backfill complete, cursor updated to block ${lastSuccessfulBlock}`);
@@ -384,7 +628,7 @@ export async function startBackfill() {
       console.log(`✅ Backfill complete, cursor unchanged at block ${lastBlock}`);
     }
     
-    console.log(`   Note: Transfer reconciliation is handled by keeper loop`);
+      console.log(`   Note: token transfers are indexed through active WSS subscriptions and webhooks`);
   } catch (error) {
     console.error("❌ Backfill error:", error);
   }
@@ -394,5 +638,5 @@ export async function startBackfill() {
  * Get all active escrow addresses
  */
 export function getActiveEscrowAddresses(): string[] {
-  return Array.from(activeEscrows);
+  return Array.from(activeEscrows.values()).flatMap((addresses) => Array.from(addresses));
 }

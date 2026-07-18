@@ -1,121 +1,257 @@
 /**
- * Escrow service functions - interact with smart contracts
- * 
- * Hybrid Confirmation Model:
- * - Seller can self-confirm via confirm() (no bond required)
- * - Oracle can confirm via confirmByOracle(txHash) when $1 bond is present
- * - Funding is derived from on-chain balance (isFunded()) - no recordFunding()
- * - Arbitrators can only act during [deadline, arbWindowEnd]
- * 
- * TX Queue Integration:
- * - All blockchain transactions go through the TX queue for reliability
- * - Enables speed-up/replacement of stuck transactions
- * - Prevents nonce conflicts and wallet lockup
+ * Escrow indexer service functions - interact with EscrowV2 / EscrowFactoryV2 (P2P model)
+ *
+ * - Push funding; isFunded() derived from on-chain balance
+ * - sellerConfirm() is optional and requires live full funding
+ * - One settlementDate + immutable termsHash
+ * - 0/1/3 arbitration with 2-of-3 voting + 30-day mutual-resolution override
+ * - No oracle confirmation, no bond
+ *
+ * Status codes (mirror the contract Status enum):
+ *   0 CREATED, 1 ACTIVE, 2 PENDING_MUTUAL_RESOLUTION, 3 SETTLED, 4 REFUNDED
  */
 
 import { parseEventLogs } from "viem";
-import { publicClient } from "../blockchain/client.js";
+import { publicClient, getPublicClient } from "../blockchain/client.js";
 import { EscrowFactoryABI, EscrowABI } from "../contracts/abis.js";
 import { ENV } from "../config/env.js";
 import { getNetwork } from "../config/networks.js";
 import { sql, hexToBuffer, bufferToHex } from "../db/client.js";
 import { nanoid } from "nanoid";
-import { submitTxJobAndWait } from "../blockchain/tx-queue.js";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
+const ZERO_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
 
-// Phase enum matching the contract (synthetic/legacy)
-export enum Phase {
-  AwaitingConfirmation = 0,
-  ConfirmedAwaitingFunding = 1,
-  Funded = 2,
-  Resolved = 3,
-  Expired = 4,
+// Status enum (matches the EscrowV2 contract)
+export enum Status {
+  CREATED = 0,
+  ACTIVE = 1,
+  PENDING_MUTUAL_RESOLUTION = 2,
+  SETTLED = 3,
+  REFUNDED = 4,
 }
 
-const PHASE_NAMES = [
-  "AwaitingConfirmation",
-  "ConfirmedAwaitingFunding", 
-  "Funded",
-  "Resolved",
-  "Expired",
+export const STATUS_NAMES = [
+  "Created",
+  "Active",
+  "PendingMutualResolution",
+  "Settled",
+  "Refunded",
 ];
+
+const TERMINAL_STATUS = 3; // status >= 3 is terminal
 
 const DEFAULT_LIST_LIMIT = 200;
 const MAX_LIST_LIMIT = 500;
 
+async function submitServerTx(
+  method: "createEscrow" | "settle" | "refundUnderfunded" | "finalizeMutualResolution" | "sweepExcess" | "recoverLatePaymentToken",
+  params: Record<string, unknown>,
+  options?: { timeoutMs?: number },
+) {
+  if (!ENV.ENABLE_SERVER_TXS) {
+    throw new Error("Server-signed transactions are disabled. Set ENABLE_SERVER_TXS=true to use this endpoint.");
+  }
+
+  const { submitTxJobAndWait } = await import("../blockchain/tx-queue.js");
+  return submitTxJobAndWait(method, params, options);
+}
+
+function addressRole(address: string | null, parties: {
+  sellerWallet: string;
+  buyerRefundWallet: string;
+  arbitrator1: string;
+  arbitrator2: string;
+  arbitrator3: string;
+}): { role: string; tone: string } {
+  const normalized = address?.toLowerCase();
+  if (!normalized) return { role: "Contract", tone: "contract" };
+  if (normalized === parties.sellerWallet.toLowerCase()) return { role: "Seller", tone: "seller" };
+  if (normalized === parties.buyerRefundWallet.toLowerCase()) return { role: "Buyer", tone: "buyer" };
+  if (
+    normalized === parties.arbitrator1.toLowerCase() ||
+    normalized === parties.arbitrator2.toLowerCase() ||
+    normalized === parties.arbitrator3.toLowerCase()
+  ) {
+    return { role: "Arbitrator", tone: "arbitrator" };
+  }
+  return { role: "Wallet", tone: "wallet" };
+}
+
+function eventText(eventName: string, outcome?: number | null): string {
+  switch (eventName) {
+    case "EscrowCreated":
+      return "Executed Function: Created";
+    case "TokenTransfer":
+      return "Called Function: Fund Escrow";
+    case "SellerConfirmed":
+      return "Called Function: Confirm";
+    case "MutualSettleApproved":
+      return "Called Function: Approve Mutual Settle";
+    case "MutualRefundApproved":
+      return "Called Function: Approve Mutual Refund";
+    case "MutualResolutionPending":
+      return outcome === 2 ? "Executed Function: Pending Mutual Refund" : "Executed Function: Pending Mutual Settle";
+    case "MutualResolutionFinalized":
+      return "Called Function: Finalize Mutual Resolution";
+    case "ArbitratorVoted":
+      return outcome === 2 ? "Called Function: Vote Refund" : "Called Function: Vote Settle";
+    case "Settled":
+      return "Executed Function: Settle";
+    case "Refunded":
+      return "Executed Function: Refund";
+    case "UnderfundedRefunded":
+      return "Executed Function: Refund Underfunded";
+    case "LatePaymentTokenRecovered":
+      return "Executed Function: Recover Late Payment";
+    case "SweptExcess":
+      return "Called Function: Sweep Excess";
+    case "SweptStrayToken":
+      return "Called Function: Sweep Stray Token";
+    default:
+      return `Executed Function: ${eventName}`;
+  }
+}
+
+async function getIndexedActivity(escrowAddress: `0x${string}`, parties: {
+  sellerWallet: string;
+  buyerRefundWallet: string;
+  arbitrator1: string;
+  arbitrator2: string;
+  arbitrator3: string;
+}, createdAt: number, chainId: number) {
+  const rows = await sql`
+    SELECT *
+    FROM (
+      SELECT
+        event_name,
+        tx_hash,
+        block_number,
+        log_index,
+        actor,
+        amount,
+        outcome,
+        created_at
+      FROM escrow_events
+      WHERE network = ${chainId.toString()}
+      AND escrow = ${hexToBuffer(escrowAddress)}
+      UNION ALL
+      SELECT
+        'TokenTransfer' AS event_name,
+        tx_hash,
+        block_number,
+        log_index,
+        from_address AS actor,
+        amount,
+        NULL::smallint AS outcome,
+        created_at
+      FROM escrow_token_transfers
+      WHERE network = ${chainId.toString()}
+      AND escrow = ${hexToBuffer(escrowAddress)}
+    ) activity
+    ORDER BY block_number DESC, log_index DESC
+    LIMIT 24
+  `;
+
+  const activity: Array<{
+    id: string;
+    timestamp: number | null;
+    role: string;
+    tone: string;
+    text: string;
+    txHash?: string;
+    blockNumber?: number;
+    logIndex?: number;
+  }> = rows.map((row: any) => {
+    const actor = row.actor ? bufferToHex(row.actor as Buffer) : null;
+    const { role, tone } = addressRole(actor, parties);
+    const timestamp = row.created_at instanceof Date
+      ? Math.floor(row.created_at.getTime() / 1000)
+      : null;
+    return {
+      id: `${row.tx_hash}-${row.log_index}`,
+      timestamp,
+      role,
+      tone,
+      text: eventText(row.event_name, row.outcome === null ? null : Number(row.outcome)),
+      txHash: row.tx_hash,
+      blockNumber: Number(row.block_number),
+      logIndex: Number(row.log_index),
+    };
+  });
+
+  activity.push({
+    id: `created-${escrowAddress}`,
+    timestamp: createdAt || null,
+    role: "Contract",
+    tone: "contract",
+    text: eventText("EscrowCreated"),
+  });
+
+  return activity;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Creation
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
- * Create a new escrow via EscrowFactory
- * Both payout (seller) and funder (buyer) are bound immutably
- * Token must be USDC or USDT (allowlisted in factory)
- * 
- * Arbitrator rules: 0, 1, or 3 arbitrators only (never 2)
- * - 0: No arbitration
- * - 1: Single arbitrator (first vote resolves)
- * - 3: Three arbitrators (arb1+arb2 must agree, or arb3 breaks deadlock)
+ * Create a new escrow via EscrowFactoryV2 (server-signed convenience path).
+ * Most creation happens client-side; this is kept for server-side automation.
  */
 export async function createEscrow(params: {
-  payout: `0x${string}`;      // seller - receives funds
-  funder: `0x${string}`;      // buyer - must fund
-  token: `0x${string}`;       // USDC or USDT address
-  targetAmount: bigint;       // amount buyer must fund
-  deadline: number;           // unix timestamp for payout
+  payout: `0x${string}`;             // seller - receives funds on settle
+  funder: `0x${string}`;             // buyer - receives funds on refund
+  token: `0x${string}`;              // USDC or USDT address
+  targetAmount: bigint;              // amount that must be funded
+  settlementDate: number;            // unix timestamp
+  termsHash?: `0x${string}`;
+  termsText?: string;
   arbitrator1?: `0x${string}`;
   arbitrator2?: `0x${string}`;
-  arbitrator3?: `0x${string}`; // deadlock arbitrator (requires arb1 + arb2)
-}): Promise<{ 
-  escrow: string; 
-  code: string; 
+  arbitrator3?: `0x${string}`;
+}): Promise<{
+  escrow: string;
+  code: string;
   txHash: string;
   token: string;
-  confirmDeadline: number;
-  arbWindowEnd: number;
+  settlementDate: number;
 }> {
-  
-  const code = nanoid(10); // Generate unique 10-char code
+  const code = nanoid(10);
 
-  // Validate arbitrators - enforce 0/1/3 rule
   const arbitrator1 = params.arbitrator1 ?? ZERO_ADDRESS;
   const arbitrator2 = params.arbitrator2 ?? ZERO_ADDRESS;
   const arbitrator3 = params.arbitrator3 ?? ZERO_ADDRESS;
+  const termsHash = params.termsHash ?? ZERO_HASH;
 
   const hasArb1 = arbitrator1 !== ZERO_ADDRESS;
   const hasArb2 = arbitrator2 !== ZERO_ADDRESS;
   const hasArb3 = arbitrator3 !== ZERO_ADDRESS;
-
-  // Enforce 0/1/3 rule: either none, only arb1, or all three
   if (hasArb2 || hasArb3) {
     if (!hasArb1 || !hasArb2 || !hasArb3) {
       throw new Error("Must have 0, 1, or 3 arbitrators (2 not allowed)");
     }
   }
 
-  // Submit TX via queue and wait for completion
-  const result = await submitTxJobAndWait("createEscrow", {
+  const result = await submitServerTx("createEscrow", {
     payout: params.payout,
     funder: params.funder,
     token: params.token,
     targetAmount: params.targetAmount.toString(),
-    deadline: params.deadline,
+    settlementDate: params.settlementDate,
+    termsHash,
     arbitrator1,
     arbitrator2,
     arbitrator3,
   }, {
-    timeoutMs: 180_000, // 3 minute timeout for creation
+    timeoutMs: 180_000,
   });
 
   const txHash = result.txHash;
   console.log(`📝 Escrow creation tx completed: ${txHash}`);
 
-  // Get receipt and parse EscrowCreated event
   const receipt = await publicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
-  
-  const logs = parseEventLogs({
-    abi: EscrowFactoryABI,
-    logs: receipt.logs,
-    eventName: "EscrowCreated",
-  });
-
+  const logs = parseEventLogs({ abi: EscrowFactoryABI, logs: receipt.logs, eventName: "EscrowCreated" });
   if (logs.length === 0) {
     throw new Error("EscrowCreated event not found in receipt");
   }
@@ -123,125 +259,108 @@ export async function createEscrow(params: {
   const event = logs[0].args as any;
   const escrowAddress = event.escrow as string;
   const tokenAddress = event.token as string;
-  const confirmDeadline = Number(event.confirmDeadline);
-  const arbWindowEnd = Number(event.arbWindowEnd);
-  const createdBlock = receipt.blockNumber;
+  const settlementDate = Number(event.settlementDate);
 
-  // Store in database
-  const arbitrator1Stored = arbitrator1 === ZERO_ADDRESS ? null : hexToBuffer(arbitrator1);
-  const arbitrator2Stored = arbitrator2 === ZERO_ADDRESS ? null : hexToBuffer(arbitrator2);
-  const arbitrator3Stored = arbitrator3 === ZERO_ADDRESS ? null : hexToBuffer(arbitrator3);
-
-  await sql`
-    INSERT INTO escrows (
-      escrow, code, network, payout, funder, token, target_amount, 
-      deadline, confirm_deadline, phase_cached, created_tx, created_block,
-      arbitrator1, arbitrator2, arbitrator3, arb_window_end
-    )
-    VALUES (
-      ${hexToBuffer(escrowAddress)},
-      ${code},
-      ${ENV.CHAIN_ID.toString()},
-      ${hexToBuffer(params.payout)},
-      ${hexToBuffer(params.funder)},
-      ${hexToBuffer(tokenAddress)},
-      ${params.targetAmount.toString()},
-      ${params.deadline},
-      ${confirmDeadline},
-      0,
-      ${txHash},
-      ${createdBlock.toString()},
-      ${arbitrator1Stored},
-      ${arbitrator2Stored},
-      ${arbitrator3Stored},
-      ${arbWindowEnd}
-    )
-  `;
+  await upsertEscrowFromEvent({
+    escrowAddress,
+    payout: params.payout,
+    funder: params.funder,
+    tokenAddress,
+    targetAmount: params.targetAmount.toString(),
+    settlementDate,
+    termsHash: event.termsHash as string,
+    termsText: params.termsText ?? null,
+    arbitrator1,
+    arbitrator2,
+    arbitrator3,
+    txHash,
+    createdBlock: receipt.blockNumber.toString(),
+    code,
+  });
 
   console.log(`✅ Escrow created: ${escrowAddress} (code: ${code}, token: ${tokenAddress})`);
 
-  return {
-    escrow: escrowAddress,
-    code,
-    txHash,
-    token: tokenAddress,
-    confirmDeadline,
-    arbWindowEnd,
-  };
+  return { escrow: escrowAddress, code, txHash, token: tokenAddress, settlementDate };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Permissionless Registration (index on-chain escrow into DB)
+// Registration / indexing
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Shared upsert for both registerEscrow() and watcher backfill.
- * Idempotent: ON CONFLICT (escrow) preserves existing code and only back-fills
- * missing created_tx / created_block.
+ * Shared upsert for registerEscrow() and watcher backfill.
+ * Idempotent on the escrow address.
  */
 export async function upsertEscrowFromEvent(params: {
+  chainId?: number;
   escrowAddress: string;
   payout: string;
   funder: string;
   tokenAddress: string;
   targetAmount: string;
-  deadline: number;
-  confirmDeadline: number;
-  arbWindowEnd: number;
+  settlementDate: number;
+  termsHash: string;
+  termsText?: string | null;
   arbitrator1: string;
   arbitrator2: string;
   arbitrator3: string;
   txHash: string;
   createdBlock: string;
+  code?: string;
 }): Promise<{ code: string; isNew: boolean }> {
+  const chainId = params.chainId ?? ENV.CHAIN_ID;
   const arb1Buf = params.arbitrator1 === ZERO_ADDRESS ? null : hexToBuffer(params.arbitrator1);
   const arb2Buf = params.arbitrator2 === ZERO_ADDRESS ? null : hexToBuffer(params.arbitrator2);
   const arb3Buf = params.arbitrator3 === ZERO_ADDRESS ? null : hexToBuffer(params.arbitrator3);
+  const termsHash = params.termsHash && params.termsHash !== ZERO_HASH ? params.termsHash : null;
 
-  // Check if already indexed
   const existing = await sql`
-    SELECT code FROM escrows WHERE escrow = ${hexToBuffer(params.escrowAddress)}
+    SELECT code FROM escrows
+    WHERE network = ${chainId.toString()}
+    AND escrow = ${hexToBuffer(params.escrowAddress)}
   `;
 
   if (existing.length > 0) {
-    // Back-fill created_tx / created_block if they were missing
     await sql`
       UPDATE escrows
       SET created_tx = COALESCE(escrows.created_tx, ${params.txHash}),
           created_block = COALESCE(escrows.created_block, ${params.createdBlock}),
+          terms_text = COALESCE(${params.termsText ?? null}, escrows.terms_text),
           updated_at = NOW()
-      WHERE escrow = ${hexToBuffer(params.escrowAddress)}
+      WHERE network = ${chainId.toString()}
+      AND escrow = ${hexToBuffer(params.escrowAddress)}
     `;
     return { code: existing[0].code as string, isNew: false };
   }
 
-  const code = nanoid(10);
+  const code = params.code ?? nanoid(10);
 
   await sql`
     INSERT INTO escrows (
       escrow, code, network, payout, funder, token, target_amount,
-      deadline, confirm_deadline, phase_cached, created_tx, created_block,
-      arbitrator1, arbitrator2, arbitrator3, arb_window_end
+      settlement_date,
+      terms_hash, terms_text, phase_cached, created_tx, created_block,
+      arbitrator1, arbitrator2, arbitrator3
     )
     VALUES (
       ${hexToBuffer(params.escrowAddress)},
       ${code},
-      ${ENV.CHAIN_ID.toString()},
+      ${chainId.toString()},
       ${hexToBuffer(params.payout)},
       ${hexToBuffer(params.funder)},
       ${hexToBuffer(params.tokenAddress)},
       ${params.targetAmount},
-      ${params.deadline},
-      ${params.confirmDeadline},
+      ${params.settlementDate},
+      ${termsHash},
+      ${params.termsText ?? null},
       0,
       ${params.txHash},
       ${params.createdBlock},
       ${arb1Buf},
       ${arb2Buf},
-      ${arb3Buf},
-      ${params.arbWindowEnd}
+      ${arb3Buf}
     )
-    ON CONFLICT (escrow) DO UPDATE SET
+    ON CONFLICT (network, escrow) DO UPDATE SET
       created_tx = COALESCE(escrows.created_tx, EXCLUDED.created_tx),
       created_block = COALESCE(escrows.created_block, EXCLUDED.created_block),
       updated_at = NOW()
@@ -251,38 +370,31 @@ export async function upsertEscrowFromEvent(params: {
 }
 
 /**
- * Register an on-chain escrow by verifying a transaction receipt.
+ * Register an on-chain escrow by verifying its creation transaction receipt.
  * Public endpoint — validates receipt, parses event, upserts into DB.
  */
-export async function registerEscrow(txHash: string): Promise<{
+export async function registerEscrow(chainId: number, txHash: string, termsText?: string): Promise<{
+  chainId: number;
   escrow: string;
   code: string;
   txHash: string;
   token: string;
-  phase: number;
-  confirmDeadline: number;
-  arbWindowEnd: number;
+  status: number;
+  statusName: string;
+  settlementDate: number;
 }> {
-  const receipt = await publicClient.getTransactionReceipt({
-    hash: txHash as `0x${string}`,
-  });
-
+  const client = getPublicClient(chainId);
+  const receipt = await client.getTransactionReceipt({ hash: txHash as `0x${string}` });
   if (receipt.status !== "success") {
     throw new Error("Transaction failed or was reverted");
   }
 
-  // Verify the tx was sent to the factory for this network
-  const network = getNetwork(ENV.CHAIN_ID);
+  const network = getNetwork(chainId);
   if (receipt.to?.toLowerCase() !== network.FACTORY.toLowerCase()) {
     throw new Error("Transaction was not sent to the EscrowFactory");
   }
 
-  const logs = parseEventLogs({
-    abi: EscrowFactoryABI,
-    logs: receipt.logs,
-    eventName: "EscrowCreated",
-  });
-
+  const logs = parseEventLogs({ abi: EscrowFactoryABI, logs: receipt.logs, eventName: "EscrowCreated" });
   if (logs.length === 0) {
     throw new Error("EscrowCreated event not found in receipt");
   }
@@ -290,18 +402,18 @@ export async function registerEscrow(txHash: string): Promise<{
   const event = logs[0].args as any;
   const escrowAddress = (event.escrow as string).toLowerCase();
   const tokenAddress = event.token as string;
-  const confirmDeadline = Number(event.confirmDeadline);
-  const arbWindowEnd = Number(event.arbWindowEnd);
+  const settlementDate = Number(event.settlementDate);
 
   const { code } = await upsertEscrowFromEvent({
+    chainId,
     escrowAddress,
     payout: event.payout as string,
     funder: event.funder as string,
     tokenAddress,
     targetAmount: event.targetAmount.toString(),
-    deadline: Number(event.deadline),
-    confirmDeadline,
-    arbWindowEnd,
+    settlementDate,
+    termsHash: event.termsHash as string,
+    termsText: termsText ?? null,
     arbitrator1: event.arbitrator1 as string,
     arbitrator2: event.arbitrator2 as string,
     arbitrator3: event.arbitrator3 as string,
@@ -312,307 +424,199 @@ export async function registerEscrow(txHash: string): Promise<{
   console.log(`📋 Escrow registered: ${escrowAddress} (code: ${code})`);
 
   return {
+    chainId,
     escrow: escrowAddress,
     code,
     txHash,
     token: tokenAddress,
-    phase: 0,
-    confirmDeadline,
-    arbWindowEnd,
+    status: 0,
+    statusName: STATUS_NAMES[0],
+    settlementDate,
   };
 }
 
-/**
- * Get escrow status from chain and DB
- * Now reads new fields: confirmed, resolved, expired, bondPresent, isFunded(), arbWindowEnd
- */
-export async function getEscrowStatus(code: string): Promise<{
-  escrow: string;
-  code: string;
-  phase: number;
-  phaseName: string;
-  payout: string;
-  funder: string;
-  token: string;
-  targetAmount: string;
-  fundedAmount: string;
-  bondCap: string;
-  deadline: number;
-  confirmDeadline: number;
-  arbWindowEnd: number;
-  createdAt: number;
-  // New hybrid model fields
-  confirmed: boolean;
-  resolved: boolean;
-  expired: boolean;
-  bondPresent: boolean;
-  isFunded: boolean;
-  // Arbitration (0, 1, or 3 arbitrators)
-  arbitrator1: string;
-  arbitrator2: string;
-  arbitrator3: string;  // Deadlock arbitrator (3-arb setup only)
-  arbitratorCount: number;  // 0, 1, or 3 (never 2)
-  deadlocked: boolean;  // True if arb1 and arb2 voted differently
-  // Actionable states
-  isPayable: boolean;
-  isExpirableNoConfirm: boolean;
-  isExpirableNoFund: boolean;
-  isTerminal: boolean;
-  isInArbWindow: boolean;
-  isSweepableAfterArbWindow: boolean;
-}> {
-  
-  // Look up in DB
-  const rows = await sql`
-    SELECT escrow FROM escrows WHERE code = ${code}
-  `;
+// ═══════════════════════════════════════════════════════════════════════════════
+// Status
+// ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Read escrow status from DB metadata plus live on-chain state.
+ * Immutable creation data and history come from the webhook-backed database;
+ * balance/status/actionability come from chain for liveness.
+ */
+export async function getEscrowStatus(code: string): Promise<any> {
+  const rows = await sql`
+    SELECT network, escrow, code, payout, funder, token, target_amount, settlement_date,
+           terms_hash, terms_text, created_at, arbitrator1, arbitrator2, arbitrator3
+    FROM escrows
+    WHERE code = ${code}
+  `;
   if (rows.length === 0) {
     throw new Error(`Escrow not found for code: ${code}`);
   }
 
-  const escrowAddress = bufferToHex(rows[0].escrow as Buffer) as `0x${string}`;
+  const row = rows[0] as any;
+  const chainId = Number(row.network);
+  const network = getNetwork(chainId);
+  const client = getPublicClient(chainId);
+  const escrowAddress = bufferToHex(row.escrow as Buffer) as `0x${string}`;
+  const sellerWallet = bufferToHex(row.payout as Buffer);
+  const buyerRefundWallet = bufferToHex(row.funder as Buffer);
+  const token = bufferToHex(row.token as Buffer);
+  const arbitrator1 = row.arbitrator1 ? bufferToHex(row.arbitrator1 as Buffer) : ZERO_ADDRESS;
+  const arbitrator2 = row.arbitrator2 ? bufferToHex(row.arbitrator2 as Buffer) : ZERO_ADDRESS;
+  const arbitrator3 = row.arbitrator3 ? bufferToHex(row.arbitrator3 as Buffer) : ZERO_ADDRESS;
+  const createdAt = row.created_at instanceof Date ? Math.floor(row.created_at.getTime() / 1000) : null;
+  const arbitrationMode = arbitrator3 !== ZERO_ADDRESS ? 3 : (arbitrator1 !== ZERO_ADDRESS ? 1 : 0);
 
-  // Read all state from chain
   const [
-    phase,
-    payout,
-    funder,
-    token,
-    targetAmount,
-    fundedAmount,
-    bondCap,
-    deadline,
-    confirmDeadline,
-    arbWindowEnd,
-    createdAt,
-    confirmed,
-    resolved,
-    expired,
-    bondPresent,
+    status,
+    balance,
+    pendingOutcome,
+    overrideWindowEnd,
+    settleVotes,
+    refundVotes,
+    mutualSettleApprovedByBuyer,
+    mutualSettleApprovedBySeller,
+    mutualRefundApprovedByBuyer,
+    mutualRefundApprovedBySeller,
     isFunded,
-    arbitrator1,
-    arbitrator2,
-    arbitrator3,
-    arbitratorCount,
-    deadlocked,
-    isPayable,
-    isExpirableNoConfirm,
-    isExpirableNoFund,
     isTerminal,
-    isInArbWindow,
-    isSweepableAfterArbWindow,
+    isActivatable,
+    isRefundableUnderfunded,
+    isSettleable,
+    isVotable,
+    isInOverrideWindow,
+    isFinalizable,
   ] = await Promise.all([
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "phase" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "payout" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "funder" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "token" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "targetAmount" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "fundedAmount" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "bondCap" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "deadline" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "confirmDeadline" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "arbWindowEnd" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "createdAt" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "confirmed" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "resolved" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "expired" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "bondPresent" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isFunded" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "arbitrator1" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "arbitrator2" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "arbitrator3" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "arbitratorCount" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "deadlocked" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isPayable" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isExpirableNoConfirm" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isExpirableNoFund" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isTerminal" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isInArbWindow" }),
-    publicClient.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isSweepableAfterArbWindow" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "statusCode" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "balance" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "pendingOutcome" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "overrideWindowEnd" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "settleVotes" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "refundVotes" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "mutualSettleApprovedByBuyer" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "mutualSettleApprovedBySeller" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "mutualRefundApprovedByBuyer" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "mutualRefundApprovedBySeller" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isFunded" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isTerminal" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isActivatable" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isRefundableUnderfunded" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isSettleable" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isVotable" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isInOverrideWindow" }),
+    client.readContract({ address: escrowAddress, abi: EscrowABI, functionName: "isFinalizable" }),
   ]);
 
-  // Update phase cache in DB
+  const statusNum = Number(status);
+
   await sql`
-    UPDATE escrows SET phase_cached = ${Number(phase)}, updated_at = NOW()
+    UPDATE escrows SET phase_cached = ${statusNum}, updated_at = NOW()
     WHERE code = ${code}
   `;
 
+  const parties = {
+    sellerWallet,
+    buyerRefundWallet,
+    arbitrator1,
+    arbitrator2,
+    arbitrator3,
+  };
+  const activity = await getIndexedActivity(escrowAddress, parties, createdAt ?? 0, chainId);
+
   return {
+    chainId,
+    chainName: network.name,
     escrow: escrowAddress,
     code,
-    phase: Number(phase),
-    phaseName: PHASE_NAMES[Number(phase)] || "Unknown",
-    payout: payout as string,
-    funder: funder as string,
-    token: token as string,
-    targetAmount: (targetAmount as bigint).toString(),
-    fundedAmount: (fundedAmount as bigint).toString(),
-    bondCap: (bondCap as bigint).toString(),
-    deadline: Number(deadline),
-    confirmDeadline: Number(confirmDeadline),
-    arbWindowEnd: Number(arbWindowEnd),
-    createdAt: Number(createdAt),
-    confirmed: confirmed as boolean,
-    resolved: resolved as boolean,
-    expired: expired as boolean,
-    bondPresent: bondPresent as boolean,
+    status: statusNum,
+    statusName: STATUS_NAMES[statusNum] || "Unknown",
+    sellerWallet,
+    buyerRefundWallet,
+    token,
+    tokenSymbol: token.toLowerCase() === network.USDT.toLowerCase() ? "USDT" : "USDC",
+    tokenDecimals: 6,
+    targetAmount: row.target_amount,
+    balance: (balance as bigint).toString(),
+    settlementDate: row.settlement_date ?? null,
+    createdAt,
+    termsHash: row.terms_hash,
+    termsText: row.terms_text ?? null,
+    arbitrator1,
+    arbitrator2,
+    arbitrator3,
+    arbitrationMode,
+    pendingOutcome: Number(pendingOutcome),
+    overrideWindowEnd: Number(overrideWindowEnd),
+    settleVotes: Number(settleVotes),
+    refundVotes: Number(refundVotes),
+    mutualSettleApprovedByBuyer: mutualSettleApprovedByBuyer as boolean,
+    mutualSettleApprovedBySeller: mutualSettleApprovedBySeller as boolean,
+    mutualRefundApprovedByBuyer: mutualRefundApprovedByBuyer as boolean,
+    mutualRefundApprovedBySeller: mutualRefundApprovedBySeller as boolean,
     isFunded: isFunded as boolean,
-    arbitrator1: arbitrator1 as string,
-    arbitrator2: arbitrator2 as string,
-    arbitrator3: arbitrator3 as string,
-    arbitratorCount: Number(arbitratorCount),  // 0, 1, or 3 (never 2)
-    deadlocked: deadlocked as boolean,
-    isPayable: isPayable as boolean,
-    isExpirableNoConfirm: isExpirableNoConfirm as boolean,
-    isExpirableNoFund: isExpirableNoFund as boolean,
     isTerminal: isTerminal as boolean,
-    isInArbWindow: isInArbWindow as boolean,
-    isSweepableAfterArbWindow: isSweepableAfterArbWindow as boolean,
+    isActivatable: isActivatable as boolean,
+    isRefundableUnderfunded: isRefundableUnderfunded as boolean,
+    isSettleable: isSettleable as boolean,
+    isVotable: isVotable as boolean,
+    isInOverrideWindow: isInOverrideWindow as boolean,
+    isFinalizable: isFinalizable as boolean,
+    isPartial: false,
+    activity,
   };
 }
 
-/**
- * Oracle confirms escrow after detecting seller's bond transfer ($1).
- * Called when oracle detects USDC/USDT transfer from seller to escrow.
- * Requires bond to already be present in escrow balance.
- */
-export async function confirmByOracle(params: {
-  escrow: `0x${string}`;
-  txHash: string;
-}): Promise<string> {
-  const result = await submitTxJobAndWait("confirmByOracle", {
-    escrow: params.escrow,
-    txHash: params.txHash,
-  });
+// ═══════════════════════════════════════════════════════════════════════════════
+// Keeper convenience callers (all permissionless on-chain)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  console.log(`📝 confirmByOracle tx completed: ${result.txHash}`);
-  
-  // Update DB
-  await sql`
-    UPDATE escrows SET phase_cached = 1, updated_at = NOW()
-    WHERE escrow = ${hexToBuffer(params.escrow)}
-  `;
-  
+export async function callSettle(chainId: number, escrowAddress: `0x${string}`): Promise<string> {
+  console.log(`🔄 Calling settle on ${escrowAddress}`);
+  const result = await submitServerTx("settle", { escrow: escrowAddress });
+  await sql`UPDATE escrows SET phase_cached = ${Status.SETTLED}, updated_at = NOW() WHERE network = ${chainId.toString()} AND escrow = ${hexToBuffer(escrowAddress)}`;
+  return result.txHash;
+}
+
+export async function callRefundUnderfunded(chainId: number, escrowAddress: `0x${string}`): Promise<string> {
+  console.log(`🔄 Calling refundUnderfunded on ${escrowAddress}`);
+  const result = await submitServerTx("refundUnderfunded", { escrow: escrowAddress });
+  await sql`UPDATE escrows SET phase_cached = ${Status.REFUNDED}, updated_at = NOW() WHERE network = ${chainId.toString()} AND escrow = ${hexToBuffer(escrowAddress)}`;
+  return result.txHash;
+}
+
+export async function callFinalizeMutualResolution(escrowAddress: `0x${string}`): Promise<string> {
+  console.log(`🔄 Calling finalizeMutualResolution on ${escrowAddress}`);
+  const result = await submitServerTx("finalizeMutualResolution", { escrow: escrowAddress });
+  return result.txHash;
+}
+
+export async function callSweepExcess(escrowAddress: `0x${string}`): Promise<string> {
+  console.log(`🔄 Calling sweepExcess on ${escrowAddress}`);
+  const result = await submitServerTx("sweepExcess", { escrow: escrowAddress });
+  return result.txHash;
+}
+
+export async function callRecoverLatePaymentToken(escrowAddress: `0x${string}`): Promise<string> {
+  console.log(`🔄 Calling recoverLatePaymentToken on ${escrowAddress}`);
+  const result = await submitServerTx("recoverLatePaymentToken", { escrow: escrowAddress });
   return result.txHash;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Keeper functions (permissionless on chain, but we call them for convenience)
+// Listings
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Finalize and pay seller after deadline (no arbitrators only)
- */
-export async function callFinalizeAfterDeadline(escrowAddress: `0x${string}`): Promise<string> {
-  console.log(`🔄 Calling finalizeAfterDeadline on ${escrowAddress}`);
-  
-  const result = await submitTxJobAndWait("finalizeAfterDeadline", {
-    escrow: escrowAddress,
-  });
-
-  console.log(`✅ finalizeAfterDeadline tx: ${result.txHash}`);
-  
-  // Update DB
-  await sql`
-    UPDATE escrows SET phase_cached = 3, updated_at = NOW()
-    WHERE escrow = ${hexToBuffer(escrowAddress)}
-  `;
-  
-  return result.txHash;
-}
-
-/**
- * Expire escrow if not confirmed within 24h
- */
-export async function callExpireIfNotConfirmed(escrowAddress: `0x${string}`): Promise<string> {
-  console.log(`🔄 Calling expireIfNotConfirmed on ${escrowAddress}`);
-  
-  const result = await submitTxJobAndWait("expireIfNotConfirmed", {
-    escrow: escrowAddress,
-  });
-
-  console.log(`✅ expireIfNotConfirmed tx: ${result.txHash}`);
-  
-  // Update DB
-  await sql`
-    UPDATE escrows SET phase_cached = 4, updated_at = NOW()
-    WHERE escrow = ${hexToBuffer(escrowAddress)}
-  `;
-  
-  return result.txHash;
-}
-
-/**
- * Expire escrow if confirmed but not funded by deadline
- */
-export async function callExpireIfNotFunded(escrowAddress: `0x${string}`): Promise<string> {
-  console.log(`🔄 Calling expireIfNotFunded on ${escrowAddress}`);
-  
-  const result = await submitTxJobAndWait("expireIfNotFunded", {
-    escrow: escrowAddress,
-  });
-
-  console.log(`✅ expireIfNotFunded tx: ${result.txHash}`);
-  
-  // Update DB
-  await sql`
-    UPDATE escrows SET phase_cached = 4, updated_at = NOW()
-    WHERE escrow = ${hexToBuffer(escrowAddress)}
-  `;
-  
-  return result.txHash;
-}
-
-/**
- * Sweep late/stray funds to treasury (after terminal state)
- */
-export async function callSweepToTreasury(escrowAddress: `0x${string}`): Promise<string> {
-  console.log(`🔄 Calling sweepToTreasury on ${escrowAddress}`);
-  
-  const result = await submitTxJobAndWait("sweepToTreasury", {
-    escrow: escrowAddress,
-  });
-
-  console.log(`✅ sweepToTreasury tx: ${result.txHash}`);
-  
-  return result.txHash;
-}
-
-/**
- * Sweep to treasury after arb window ends without resolution
- * (permissionless, but good ops hygiene to call it)
- */
-export async function callSweepToTreasuryAfterArbWindow(escrowAddress: `0x${string}`): Promise<string> {
-  console.log(`🔄 Calling sweepToTreasuryAfterArbWindow on ${escrowAddress}`);
-  
-  const result = await submitTxJobAndWait("sweepToTreasuryAfterArbWindow", {
-    escrow: escrowAddress,
-  });
-
-  console.log(`✅ sweepToTreasuryAfterArbWindow tx: ${result.txHash}`);
-  
-  // Update DB
-  await sql`
-    UPDATE escrows SET phase_cached = 3, updated_at = NOW()
-    WHERE escrow = ${hexToBuffer(escrowAddress)}
-  `;
-  
-  return result.txHash;
-}
-
-/**
- * List escrows stored in the DB (no chain reads)
- */
 export async function listEscrows(params?: {
   limit?: number;
   query?: string;
 }): Promise<Array<{
   escrow: string;
   code: string;
-  phase: number;
-  phaseName: string;
-  deadline: number | null;
+  status: number;
+  statusName: string;
+  settlementDate: number | null;
   targetAmount: string | null;
   payout: string;
   funder: string;
@@ -627,9 +631,9 @@ export async function listEscrows(params?: {
   const escrowLike = query ? `%${escrowQuery}%` : null;
 
   const rows = await sql`
-    SELECT escrow, code, phase_cached, deadline, target_amount, payout, funder
+    SELECT network, escrow, code, phase_cached, settlement_date, target_amount, payout, funder
     FROM escrows
-    WHERE network = ${ENV.CHAIN_ID.toString()}
+    WHERE 1 = 1
     ${query ? sql`AND (
       code ILIKE ${codeQuery}
       OR lower(encode(escrow, 'hex')) ILIKE ${escrowLike}
@@ -639,13 +643,14 @@ export async function listEscrows(params?: {
   `;
 
   return rows.map((row: any) => {
-    const phase = Number(row.phase_cached);
+    const status = Number(row.phase_cached);
     return {
+      chainId: Number(row.network),
       escrow: bufferToHex(row.escrow as Buffer),
       code: row.code,
-      phase,
-      phaseName: PHASE_NAMES[phase] || "Unknown",
-      deadline: row.deadline ?? null,
+      status,
+      statusName: STATUS_NAMES[status] || "Unknown",
+      settlementDate: row.settlement_date ?? null,
       targetAmount: row.target_amount ?? null,
       payout: bufferToHex(row.payout as Buffer),
       funder: bufferToHex(row.funder as Buffer),
@@ -657,85 +662,41 @@ export async function listEscrows(params?: {
  * Get all active (non-terminal) escrows from DB
  */
 export async function getActiveEscrows(): Promise<Array<{
+  chainId: number;
   escrow: string;
   code: string;
-  phase: number;
-  deadline: number;
-  confirmDeadline: number;
-  arbWindowEnd: number | null;
+  status: number;
+  settlementDate: number | null;
   payout: string;
   funder: string;
   token: string | null;
   targetAmount: string;
   createdBlock: bigint | null;
-  arbitratorCount: number;  // 0, 1, or 3 (never 2)
+  arbitrationMode: number;
 }>> {
   const rows = await sql`
-    SELECT escrow, code, phase_cached, deadline, confirm_deadline, arb_window_end,
+    SELECT network, escrow, code, phase_cached, settlement_date,
            payout, funder, token, target_amount, created_block,
-           CASE 
+           CASE
              WHEN arbitrator3 IS NOT NULL THEN 3
              WHEN arbitrator1 IS NOT NULL THEN 1
              ELSE 0
-           END as arb_count
+           END as arb_mode
     FROM escrows
-    WHERE network = ${ENV.CHAIN_ID.toString()}
-    AND phase_cached < 3
+    WHERE phase_cached < ${TERMINAL_STATUS}
   `;
 
   return rows.map((row: any) => ({
+    chainId: Number(row.network),
     escrow: bufferToHex(row.escrow as Buffer),
     code: row.code,
-    phase: row.phase_cached,
-    deadline: row.deadline,
-    confirmDeadline: row.confirm_deadline,
-    arbWindowEnd: row.arb_window_end ?? null,
+    status: row.phase_cached,
+    settlementDate: row.settlement_date ?? null,
     payout: bufferToHex(row.payout as Buffer),
     funder: bufferToHex(row.funder as Buffer),
     token: row.token ? bufferToHex(row.token as Buffer) : null,
     targetAmount: row.target_amount,
     createdBlock: row.created_block ? BigInt(row.created_block) : null,
-    arbitratorCount: row.arb_count ?? 0,  // 0, 1, or 3 (never 2)
+    arbitrationMode: row.arb_mode ?? 0,
   }));
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Legacy/deprecated functions (kept for backward compatibility)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * @deprecated Use confirmByOracle() instead
- * Legacy: Record confirmation (was recordConfirmation in V1)
- */
-export async function recordConfirmation(params: {
-  escrow: `0x${string}`;
-  confirmer: `0x${string}`;
-  amount: string;
-  txHash: string;
-}): Promise<string> {
-  // In the new model, we just call confirmByOracle with the txHash
-  // The confirmer and amount validation happens on-chain
-  return confirmByOracle({
-    escrow: params.escrow,
-    txHash: params.txHash,
-  });
-}
-
-/**
- * @deprecated Funding is now derived from on-chain balance
- * Legacy: Record funding (was recordFunding in V1)
- * This function is now a no-op since funding is derived from balance.
- */
-export async function recordFunding(params: {
-  escrow: `0x${string}`;
-  funder: `0x${string}`;
-  amount: string;
-  txHash: string;
-}): Promise<string> {
-  console.log(`⚠️ recordFunding() is deprecated - funding is now derived from balance`);
-  console.log(`   Escrow: ${params.escrow}, Amount: ${params.amount}, TxHash: ${params.txHash}`);
-  
-  // No-op - funding status is derived from on-chain balance via isFunded()
-  // Just return empty string to indicate no tx was sent
-  return "";
 }

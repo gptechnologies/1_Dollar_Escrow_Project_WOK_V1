@@ -1,4 +1,4 @@
--- Escrow Oracle Database Schema (Deterministic V1)
+-- Escrow Indexer Database Schema
 -- Run this against your Postgres instance (Neon/Supabase/Railway)
 
 -- Track last processed block per network
@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS cursor (
 
 -- Registry of all escrows we're watching
 CREATE TABLE IF NOT EXISTS escrows (
-  escrow BYTEA PRIMARY KEY,
+  escrow BYTEA NOT NULL,
   code TEXT NOT NULL UNIQUE,
   network TEXT NOT NULL,
   -- Immutable parties (bound at creation)
@@ -18,29 +18,68 @@ CREATE TABLE IF NOT EXISTS escrows (
   funder BYTEA NOT NULL,        -- buyer - must fund
   -- Token (USDC or USDT)
   token BYTEA NOT NULL,         -- escrow token address (USDC or USDT)
-  -- Amounts and deadlines
+  -- Amounts and one-date settlement model
   target_amount TEXT,           -- amount buyer must fund (stored as string for bigint)
-  deadline INTEGER,             -- payout deadline (unix timestamp)
-  confirm_deadline INTEGER,     -- 24h confirm window (unix timestamp)
-  -- Optional arbitrators
+  settlement_date INTEGER,      -- P2P: resolution / underfunded-refund time (unix timestamp)
+  -- Terms (immutable hash on-chain; full text cached off-chain for the dashboard)
+  terms_hash TEXT,
+  terms_text TEXT,
+  -- Optional arbitrators (0, 1, or 3)
   arbitrator1 BYTEA,
   arbitrator2 BYTEA,
-  -- State
+  arbitrator3 BYTEA,
+  -- State: phase_cached holds the EscrowV2 Status code (0..4)
   phase_cached SMALLINT DEFAULT 0,
   created_tx TEXT,
   created_block BIGINT,            -- block number when escrow was created (for bounded log queries)
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (network, escrow)
 );
 
--- Deduplication: track processed transactions
--- Primary key is (tx_hash, escrow) to handle multi-log transactions correctly
-CREATE TABLE IF NOT EXISTS processed_tx (
+-- Log-level deduplication for event indexing.
+-- A single transaction can emit multiple relevant logs for the same escrow.
+CREATE TABLE IF NOT EXISTS processed_logs (
+  network TEXT NOT NULL,
   tx_hash TEXT NOT NULL,
-  escrow BYTEA NOT NULL,
+  log_index INTEGER NOT NULL,
+  escrow BYTEA,
   event_type TEXT,
   seen_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (tx_hash, escrow)
+  PRIMARY KEY (network, tx_hash, log_index)
+);
+
+-- Durable escrow action/event timeline for dashboard history and future action buttons.
+CREATE TABLE IF NOT EXISTS escrow_events (
+  id BIGSERIAL PRIMARY KEY,
+  network TEXT NOT NULL,
+  escrow BYTEA NOT NULL,
+  event_name TEXT NOT NULL,
+  tx_hash TEXT NOT NULL,
+  block_number BIGINT NOT NULL,
+  log_index INTEGER NOT NULL,
+  actor BYTEA,
+  amount TEXT,
+  outcome SMALLINT,
+  raw_args JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (network, tx_hash, log_index)
+);
+
+-- Funding is push-based, so deposits are ERC-20 Transfer logs to escrow addresses.
+CREATE TABLE IF NOT EXISTS escrow_token_transfers (
+  id BIGSERIAL PRIMARY KEY,
+  network TEXT NOT NULL,
+  token BYTEA NOT NULL,
+  escrow BYTEA NOT NULL,
+  from_address BYTEA NOT NULL,
+  to_address BYTEA NOT NULL,
+  amount TEXT NOT NULL,
+  tx_hash TEXT NOT NULL,
+  block_number BIGINT NOT NULL,
+  log_index INTEGER NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (network, tx_hash, log_index)
 );
 
 -- Indexes for performance
@@ -49,136 +88,10 @@ CREATE INDEX IF NOT EXISTS idx_escrows_network ON escrows(network);
 CREATE INDEX IF NOT EXISTS idx_escrows_phase ON escrows(phase_cached);
 CREATE INDEX IF NOT EXISTS idx_escrows_payout ON escrows(payout);
 CREATE INDEX IF NOT EXISTS idx_escrows_funder ON escrows(funder);
-CREATE INDEX IF NOT EXISTS idx_processed_tx_escrow ON processed_tx(escrow);
-CREATE INDEX IF NOT EXISTS idx_processed_tx_seen_at ON processed_tx(seen_at);
+CREATE INDEX IF NOT EXISTS idx_processed_logs_escrow ON processed_logs(escrow);
+CREATE INDEX IF NOT EXISTS idx_escrow_events_escrow_block ON escrow_events(network, escrow, block_number DESC, log_index DESC);
+CREATE INDEX IF NOT EXISTS idx_escrow_token_transfers_escrow_block ON escrow_token_transfers(network, escrow, block_number DESC, log_index DESC);
 
--- Insert default cursor for supported networks
-INSERT INTO cursor (network, last_block) VALUES ('421614', 0) ON CONFLICT DO NOTHING;
+-- Insert default cursors for the two supported production networks.
 INSERT INTO cursor (network, last_block) VALUES ('42161', 0) ON CONFLICT DO NOTHING;
-
--- Migration: Add created_block column if it doesn't exist
-DO $$ 
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_name = 'escrows' AND column_name = 'created_block'
-  ) THEN
-    ALTER TABLE escrows ADD COLUMN created_block BIGINT;
-  END IF;
-END $$;
-
--- Migration: Add token column if it doesn't exist
-DO $$ 
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_name = 'escrows' AND column_name = 'token'
-  ) THEN
-    ALTER TABLE escrows ADD COLUMN token BYTEA;
-  END IF;
-END $$;
-
--- Migration: Add arbitrator1 column if it doesn't exist
-DO $$ 
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_name = 'escrows' AND column_name = 'arbitrator1'
-  ) THEN
-    ALTER TABLE escrows ADD COLUMN arbitrator1 BYTEA;
-  END IF;
-END $$;
-
--- Migration: Add arbitrator2 column if it doesn't exist
-DO $$ 
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_name = 'escrows' AND column_name = 'arbitrator2'
-  ) THEN
-    ALTER TABLE escrows ADD COLUMN arbitrator2 BYTEA;
-  END IF;
-END $$;
-
--- Migration: Add arbitrator3 column if it doesn't exist (deadlock arbitrator for 3-arb setup)
-DO $$ 
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_name = 'escrows' AND column_name = 'arbitrator3'
-  ) THEN
-    ALTER TABLE escrows ADD COLUMN arbitrator3 BYTEA;
-  END IF;
-END $$;
-
--- Migration: Add arb_window_end column if it doesn't exist (Hybrid Confirmation Model)
-DO $$ 
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_name = 'escrows' AND column_name = 'arb_window_end'
-  ) THEN
-    ALTER TABLE escrows ADD COLUMN arb_window_end INTEGER;
-  END IF;
-END $$;
-
--- Payment links for QR-based stablecoin payments
-CREATE TABLE IF NOT EXISTS payment_links (
-  id SERIAL PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE,
-  wallet BYTEA NOT NULL,
-  token BYTEA NOT NULL,
-  amount TEXT NOT NULL,
-  description TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_payment_links_code ON payment_links(code);
-
--- Migration: Add on_chain and link_id columns to payment_links
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'payment_links' AND column_name = 'on_chain'
-  ) THEN
-    ALTER TABLE payment_links ADD COLUMN on_chain BOOLEAN DEFAULT FALSE;
-  END IF;
-END $$;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'payment_links' AND column_name = 'link_id'
-  ) THEN
-    ALTER TABLE payment_links ADD COLUMN link_id BYTEA;
-  END IF;
-END $$;
-
--- Migration: Change processed_tx primary key from tx_hash to (tx_hash, escrow)
--- This fixes multi-log transaction handling and improves reorg safety
-DO $$
-BEGIN
-  -- Check if the old primary key constraint exists (single column tx_hash)
-  IF EXISTS (
-    SELECT 1 FROM information_schema.table_constraints tc
-    JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-    WHERE tc.table_name = 'processed_tx' 
-    AND tc.constraint_type = 'PRIMARY KEY'
-    AND kcu.column_name = 'tx_hash'
-    AND NOT EXISTS (
-      SELECT 1 FROM information_schema.key_column_usage kcu2 
-      WHERE kcu2.constraint_name = tc.constraint_name 
-      AND kcu2.column_name = 'escrow'
-    )
-  ) THEN
-    -- Drop the old primary key
-    ALTER TABLE processed_tx DROP CONSTRAINT processed_tx_pkey;
-    -- Make escrow NOT NULL (needed for composite PK)
-    UPDATE processed_tx SET escrow = '\x0000000000000000000000000000000000000000'::BYTEA WHERE escrow IS NULL;
-    ALTER TABLE processed_tx ALTER COLUMN escrow SET NOT NULL;
-    -- Add the new composite primary key
-    ALTER TABLE processed_tx ADD PRIMARY KEY (tx_hash, escrow);
-    RAISE NOTICE 'Migrated processed_tx primary key to (tx_hash, escrow)';
-  END IF;
-END $$;
+INSERT INTO cursor (network, last_block) VALUES ('1', 0) ON CONFLICT DO NOTHING;

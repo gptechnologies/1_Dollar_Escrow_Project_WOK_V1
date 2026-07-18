@@ -1,94 +1,145 @@
-# AGENTS.md -- Crow Escrow Smart Contract Reference
+# AGENTS.md -- Crow P2P Escrow Reference
 
-> This document is a programmatic reference for AI agents and developers.
-> It describes how to interact with the Crow escrow system on Arbitrum
-> without the web UI -- purely through on-chain calls and API endpoints.
+> Programmatic reference for agents and developers working with Crow P2P escrow.
+> Crow uses `EscrowV2` on Arbitrum One and Ethereum, with manual wallet transactions and a
+> backend indexer/API for lookup codes, metadata, webhooks, and dashboard history.
 
 ## Network & Addresses
 
 | Item | Value |
 |------|-------|
-| **Network** | Arbitrum One |
-| **Chain ID** | `42161` |
-| **RPC (HTTP)** | `https://arb1.arbitrum.io/rpc` |
-| **RPC (WSS)** | `wss://arb1.arbitrum.io/rpc` |
-| **EscrowFactory** | `0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9` |
-| **PaymentRouter** | `0xe65CBf11e2F997e3a5Fa2E8c12596C1992d51c95` |
-| **USDC** | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (6 decimals) |
-| **USDT** | `0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9` (6 decimals) |
+| Network | Arbitrum One |
+| Chain ID | `42161` |
+| RPC HTTP | `https://arb1.arbitrum.io/rpc` |
+| RPC WSS | `wss://arb1.arbitrum.io/rpc` |
+| EscrowFactoryV2 | deploy pending; set `FACTORY_ADDRESS` and `NEXT_PUBLIC_FACTORY_ADDRESS` after `packages/contracts/scripts/deploy-prod-v2.ts` |
+| USDC | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+| USDT | `0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9` |
+| Ethereum Chain ID | `1` |
+| Ethereum EscrowFactoryV2 | deploy pending; set `ETHEREUM_FACTORY_ADDRESS` and `NEXT_PUBLIC_ETHEREUM_FACTORY_ADDRESS` |
+| Ethereum USDC | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` |
+| Ethereum USDT | `0xdAC17F958D2ee523a2206206994597C13D831ec7` |
 
-All amounts are in raw token units (6 decimals). $100 = `100000000`. $1 = `1000000`.
+Amounts are raw 6-decimal token units. `$100 = 100000000`, `$1 = 1000000`.
 
-## Escrow Lifecycle
+## Architecture
 
+There is no on-chain oracle.
+
+The service in `packages/oracle` is an indexer/API despite the legacy folder name.
+It watches WSS/webhook logs, stores lookup codes and off-chain terms text, and
+combines database metadata with live on-chain reads for dashboard responses.
+
+Money moves only through user/manual contract transactions.
+
+## Escrow Model
+
+An escrow has two immutable parties:
+
+- seller: `sellerWallet` / factory `_payout`; receives settlement payout
+- buyer: `buyerRefundWallet` / factory `_funder`; receives refunds
+
+Allowed value destinations:
+
+- settle: seller receives `targetAmount - fee`; treasury receives fee and excess
+- refund: buyer receives refundable balance
+- sweep/recover: late, excess, or stray funds go to the contract-defined destination
+
+Funding is push-based. The buyer transfers USDC/USDT directly to the escrow
+contract address. Funded status is derived from live balance:
+
+```text
+balance >= targetAmount
 ```
-Creation ──► Awaiting Confirmation ──► Confirmed, Awaiting Funding ──► Funded
-                  │                          │                           │
-                  │ (24h timeout)            │ (deadline reached,       │
-                  ▼                          │  not funded)             │
-            EXPIRED (no confirm)             ▼                         │
-                                       EXPIRED (no fund)              │
-                                                                      │
-                  ┌───────────────────────────────────────────────────┘
-                  │
-                  ▼
-           ┌─────────────┐
-           │ No arbs?    │──YES──► finalizeAfterDeadline() ──► RESOLVED (seller paid)
-           └─────────────┘
-                  │ NO (has arbitrators)
-                  ▼
-           Arbitration Window [deadline, deadline + 7 days]
-                  │
-           ┌──────┴──────┐
-           │             │
-     arbitratorRelease  arbitratorRefund
-     (seller paid)      (buyer refunded)
-           │             │
-           ▼             ▼
-        RESOLVED      RESOLVED
-                  │
-                  │ (window expires, no vote)
-                  ▼
-           sweepToTreasuryAfterArbWindow() ──► funds go to treasury
+
+## One-Date Lifecycle
+
+There is one date:
+
+```text
+settlementDate
 ```
 
-**Mutual actions** (available before deadline, no-arb escrows only):
-- Both parties approve `approveMutualRelease()` → seller paid early
-- Both parties approve `approveMutualRefund()` → buyer refunded early
+There is no funding date, funding deadline, confirmation deadline, or legacy
+unconfirmed-refund path.
 
-**Mutual actions** (available anytime before resolution):
-- Both parties approve `approveDeadlineExtension(newDeadline)` → deadline extended (max +14 days from original)
-- Both parties approve `approveArbitratorSwap(arb1, arb2, arb3)` → arbitrators replaced, deadline pushed +7 days
+Status enum:
+
+```solidity
+0 CREATED
+1 ACTIVE
+2 PENDING_MUTUAL_RESOLUTION
+3 SETTLED
+4 REFUNDED
+```
+
+Removed legacy names/functions:
+
+```text
+RELEASED
+INACTIVE
+fundingDeadline
+settlementDeadline
+refundInactive()
+refundUnconfirmed()
+```
+
+Lifecycle summary:
+
+```text
+CREATED
+  ├─ buyer funds by ERC-20 transfer
+  ├─ sellerConfirm() after full funding                     -> ACTIVE
+  ├─ approveMutualSettle/Refund by buyer + seller
+  │    ├─ no arbitrators                                    -> SETTLED | REFUNDED
+  │    └─ arbitrated                                        -> PENDING_MUTUAL_RESOLUTION
+  ├─ settle() after settlementDate if fully funded, no-arb   -> SETTLED
+  └─ refundUnderfunded() after settlementDate if underfunded -> REFUNDED
+
+ACTIVE
+  ├─ settle() after settlementDate if no-arb                 -> SETTLED
+  ├─ approveMutualSettle/Refund by buyer + seller
+  │    ├─ no arbitrators                                    -> SETTLED | REFUNDED
+  │    └─ arbitrated                                        -> PENDING_MUTUAL_RESOLUTION
+  └─ arbitrator vote path                                   -> SETTLED | REFUNDED
+
+PENDING_MUTUAL_RESOLUTION
+  ├─ arbitrator override inside 30-day window                -> SETTLED | REFUNDED
+  └─ finalizeMutualResolution() after window                 -> SETTLED | REFUNDED
+```
+
+Important rule: seller confirmation is optional. A fully funded `CREATED` escrow
+can still be settled after `settlementDate`; it must not be refunded only because
+the seller did not confirm.
 
 ## Creating an Escrow
 
-Call `createEscrowSimple` on the factory. This is **permissionless** -- any wallet can call it.
-
-### Function Signature
+Call `createEscrowSimple` on `EscrowFactoryV2`.
 
 ```solidity
 function createEscrowSimple(
-    address _payout,        // seller - receives funds on success
-    address _funder,        // buyer - must fund the escrow
-    address _token,         // USDC or USDT address (must be allowlisted)
-    uint256 _targetAmount,  // amount buyer must fund (raw, 6 decimals)
-    uint64  _deadline,      // unix timestamp when seller gets paid
-    address _arbitrator1,   // optional (use 0x0 for none)
-    address _arbitrator2,   // optional (requires arb1 + arb3)
-    address _arbitrator3    // deadlock arbitrator (requires arb1 + arb2)
+    address _payout,
+    address _funder,
+    address _token,
+    uint256 _targetAmount,
+    uint64  _settlementDate,
+    bytes32 _termsHash,
+    address _arbitrator1,
+    address _arbitrator2,
+    address _arbitrator3
 ) external returns (address escrow)
 ```
 
-### Rules
+Rules:
 
-- `_payout` and `_funder` must be different non-zero addresses
-- `_token` must be USDC or USDT (allowlisted on factory)
-- `_targetAmount` > 0
-- `_deadline` must be in the future, within 365 days of now
-- Arbitrators: must be 0, 1, or 3 (never 2). No arbitrator can be the buyer or seller. All must be unique.
-- Uses the factory's `defaultBondCap` ($1 = 1000000)
+- `_payout` and `_funder` must be different non-zero addresses.
+- `_token` must be allowlisted USDC or USDT.
+- `_targetAmount >= 1000000`.
+- `_settlementDate > now` and `<= now + 365 days`.
+- Arbitrators must be 0, 1, or 3 addresses; never 2.
+- Arbitrators cannot be buyer or seller and must be unique.
 
-### Emitted Event
+`EscrowCreated`:
 
 ```solidity
 event EscrowCreated(
@@ -97,766 +148,168 @@ event EscrowCreated(
     address indexed payout,
     address token,
     uint256 targetAmount,
-    uint256 bondCap,
-    uint64  deadline,
-    uint64  createdAt,
-    uint64  confirmDeadline,    // createdAt + 24 hours
-    uint64  arbWindowEnd,       // deadline + 7 days
+    uint64 settlementDate,
+    uint64 createdAt,
+    bytes32 termsHash,
+    uint8 arbitrationMode,
     address arbitrator1,
     address arbitrator2,
     address arbitrator3
 )
 ```
 
-### viem Example
+## Manual Actions
 
-```typescript
-import { createPublicClient, createWalletClient, http, encodeFunctionData, parseEventLogs } from 'viem';
-import { arbitrum } from 'viem/chains';
-import { privateKeyToAccount } from 'viem/accounts';
-
-const FACTORY = '0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9';
-const USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
-const ZERO = '0x0000000000000000000000000000000000000000';
-
-const factoryABI = [{
-  inputs: [
-    { name: '_payout', type: 'address' },
-    { name: '_funder', type: 'address' },
-    { name: '_token', type: 'address' },
-    { name: '_targetAmount', type: 'uint256' },
-    { name: '_deadline', type: 'uint64' },
-    { name: '_arbitrator1', type: 'address' },
-    { name: '_arbitrator2', type: 'address' },
-    { name: '_arbitrator3', type: 'address' },
-  ],
-  name: 'createEscrowSimple',
-  outputs: [{ name: 'escrow', type: 'address' }],
-  stateMutability: 'nonpayable',
-  type: 'function',
-}, {
-  anonymous: false,
-  inputs: [
-    { indexed: true, name: 'escrow', type: 'address' },
-    { indexed: true, name: 'funder', type: 'address' },
-    { indexed: true, name: 'payout', type: 'address' },
-    { indexed: false, name: 'token', type: 'address' },
-    { indexed: false, name: 'targetAmount', type: 'uint256' },
-    { indexed: false, name: 'bondCap', type: 'uint256' },
-    { indexed: false, name: 'deadline', type: 'uint64' },
-    { indexed: false, name: 'createdAt', type: 'uint64' },
-    { indexed: false, name: 'confirmDeadline', type: 'uint64' },
-    { indexed: false, name: 'arbWindowEnd', type: 'uint64' },
-    { indexed: false, name: 'arbitrator1', type: 'address' },
-    { indexed: false, name: 'arbitrator2', type: 'address' },
-    { indexed: false, name: 'arbitrator3', type: 'address' },
-  ],
-  name: 'EscrowCreated',
-  type: 'event',
-}] as const;
-
-const account = privateKeyToAccount('0xYOUR_PRIVATE_KEY');
-const publicClient = createPublicClient({ chain: arbitrum, transport: http() });
-const walletClient = createWalletClient({ account, chain: arbitrum, transport: http() });
-
-// Create a $500 USDC escrow, deadline 7 days from now, no arbitrators
-const deadline = BigInt(Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60);
-
-const hash = await walletClient.writeContract({
-  address: FACTORY,
-  abi: factoryABI,
-  functionName: 'createEscrowSimple',
-  args: [
-    '0xSELLER_ADDRESS',  // payout
-    '0xBUYER_ADDRESS',   // funder
-    USDC,                // token
-    500_000_000n,        // $500 (6 decimals)
-    deadline,
-    ZERO, ZERO, ZERO,   // no arbitrators
-  ],
-});
-
-const receipt = await publicClient.waitForTransactionReceipt({ hash });
-const logs = parseEventLogs({ abi: factoryABI, logs: receipt.logs, eventName: 'EscrowCreated' });
-const escrowAddress = logs[0].args.escrow;
-console.log('Escrow deployed at:', escrowAddress);
-```
-
-## Confirmation (within 24h of creation)
-
-Two paths -- only one is needed:
-
-### Path A: Seller self-confirms (no bond)
+Funding is not an escrow function call. It is an ERC-20 transfer:
 
 ```solidity
-function confirm() external  // only callable by payout (seller)
+IERC20(token).transfer(escrowAddress, targetAmount)
 ```
 
-The seller calls `confirm()` on the escrow contract. No token transfer needed.
-
-```typescript
-await walletClient.writeContract({
-  address: escrowAddress,
-  abi: [{ inputs: [], name: 'confirm', outputs: [], stateMutability: 'nonpayable', type: 'function' }],
-  functionName: 'confirm',
-});
-```
-
-### Path B: Oracle confirms after bond (requires $1 bond)
-
-The seller transfers `bondCap` ($1 = 1000000 raw) of the escrow token directly to the escrow address. The oracle detects this and calls `confirmByOracle(txHash)`.
-
-This path is oracle-only and not available to external callers.
-
-## Funding
-
-Funding is **not** a contract call. The buyer (funder) sends an ERC-20 `transfer()` of `targetAmount` tokens directly to the escrow contract address.
-
-```typescript
-const erc20ABI = [{
-  inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }],
-  name: 'transfer',
-  outputs: [{ type: 'bool' }],
-  stateMutability: 'nonpayable',
-  type: 'function',
-}] as const;
-
-// Fund escrow with $500 USDC
-await walletClient.writeContract({
-  address: USDC,
-  abi: erc20ABI,
-  functionName: 'transfer',
-  args: [escrowAddress, 500_000_000n],
-});
-```
-
-Check if funded:
-
-```typescript
-const funded = await publicClient.readContract({
-  address: escrowAddress,
-  abi: [{ inputs: [], name: 'isFunded', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' }],
-  functionName: 'isFunded',
-});
-```
-
-If `bondPresent` is true (oracle confirmed with bond), `isFunded()` checks `balance >= bondCap + targetAmount`. Otherwise it checks `balance >= targetAmount`.
-
-## Resolution
-
-### No Arbitrators: `finalizeAfterDeadline()`
+Escrow functions:
 
 ```solidity
-function finalizeAfterDeadline() external  // permissionless
+function sellerConfirm() external
+function settle() external
+function refundUnderfunded() external
+function approveMutualSettle() external
+function approveMutualRefund() external
+function finalizeMutualResolution() external
+function arbSettle() external
+function arbRefund() external
+function arbVoteSettle() external
+function arbVoteRefund() external
+function sweepExcess() external
+function recoverLatePaymentToken() external
+function sweepStrayToken(IERC20 erc20, uint256 amt) external
 ```
 
-Callable by anyone after the deadline if the escrow is confirmed, funded, and has no arbitrators. Pays the seller (minus fee), returns bond if present, sweeps excess to treasury.
-
-```typescript
-await walletClient.writeContract({
-  address: escrowAddress,
-  abi: [{ inputs: [], name: 'finalizeAfterDeadline', outputs: [], stateMutability: 'nonpayable', type: 'function' }],
-  functionName: 'finalizeAfterDeadline',
-});
-```
-
-### With Arbitrators: Arbitrator votes
-
-During the arbitration window (`deadline` to `arbWindowEnd`), arbitrators call:
-
-```solidity
-function arbitratorRelease() external  // only callable by arbitrator -- pays seller
-function arbitratorRefund() external   // only callable by arbitrator -- refunds buyer
-```
-
-- **1 arbitrator**: first vote resolves immediately
-- **3 arbitrators**: arb1 and arb2 must agree. If they disagree (deadlock), arb3 breaks the tie.
-
-## Expiry
-
-Both are permissionless -- anyone can call them when conditions are met:
-
-```solidity
-function expireIfNotConfirmed() external  // callable after confirmDeadline (24h) if not confirmed
-function expireIfNotFunded() external     // callable after deadline if confirmed but not funded
-```
-
-## Mutual Actions (Both Parties Must Approve)
-
-Each action requires both the funder and payout to call the same function:
-
-| Function | When | Effect |
-|----------|------|--------|
-| `approveMutualRelease()` | Before deadline, no arbs | Pays seller early |
-| `approveMutualRefund()` | Before deadline, no arbs | Refunds buyer early |
-| `approveDeadlineExtension(uint64 newDeadline)` | Before resolution | Extends deadline (max +14 days from original) |
-| `approveArbitratorSwap(address a1, address a2, address a3)` | Before resolution | Replaces arbitrators, pushes deadline +7 days |
-
-For extensions, both parties must pass the exact same `newDeadline` value. For swaps, both must pass the same arbitrator set.
-
-## Sweeps
-
-```solidity
-function sweepToTreasury() external            // permissionless -- only in terminal states (resolved/expired)
-function sweepToTreasuryAfterArbWindow() external  // permissionless -- after arb window with no resolution
-function sweepStrayToken(IERC20 erc20, uint256 amt) external  // oracle only -- non-escrow tokens
-```
-
-## Reading Escrow State
-
-All state is readable via public view functions on the escrow contract:
-
-```typescript
-const escrowABI = [
-  { inputs: [], name: 'payout', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'funder', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'token', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'targetAmount', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'bondCap', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'deadline', outputs: [{ type: 'uint64' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'confirmDeadline', outputs: [{ type: 'uint64' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'arbWindowEnd', outputs: [{ type: 'uint64' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'createdAt', outputs: [{ type: 'uint64' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'confirmed', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'resolved', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'expired', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'bondPresent', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'isFunded', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'fundedAmount', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'arbitrator1', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'arbitrator2', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'arbitrator3', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'arbitratorCount', outputs: [{ type: 'uint8' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'deadlocked', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'isPayable', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'isTerminal', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'isExpirableNoConfirm', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'isExpirableNoFund', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'isInArbWindow', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-  { inputs: [], name: 'isSweepableAfterArbWindow', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-] as const;
-
-// Read all state in one multicall
-const results = await publicClient.multicall({
-  contracts: escrowABI.map(fn => ({
-    address: escrowAddress,
-    abi: [fn],
-    functionName: fn.name,
-  })),
-  allowFailure: false,
-});
-```
-
-### Actionable State Helpers
-
-| View Function | Returns `true` when |
-|--------------|---------------------|
-| `isPayable()` | No arbs, confirmed, funded, deadline reached, not terminal |
-| `isExpirableNoConfirm()` | Not confirmed, past `confirmDeadline` (24h), not terminal |
-| `isExpirableNoFund()` | Confirmed, not funded, past `deadline`, not terminal |
-| `isInArbWindow()` | Has arbs, confirmed, funded, within [deadline, arbWindowEnd] |
-| `isSweepableAfterArbWindow()` | Has arbs, past `arbWindowEnd`, not resolved |
-| `isTerminal()` | Resolved or expired |
-
-## Fee Structure
-
-```solidity
-function calculateFee(uint256 amount) public pure returns (uint256 fee)
-```
-
-- If `amount` > $100 (100000000): fee = $1 (1000000) -- capped
-- If `amount` <= $100: fee = 1% of amount
-- Minimum fee: $0.01 (10000)
-
-Examples: $500 escrow → $1 fee. $50 escrow → $0.50 fee. $0.50 escrow → $0.01 fee.
-
-Fees are deducted from the seller's payout at resolution time. The buyer always funds exactly `targetAmount`.
-
-## Permission Map
+Permission map:
 
 | Function | Who Can Call |
 |----------|-------------|
-| `createEscrowSimple()` | Anyone (on factory) |
-| `confirm()` | Seller (payout) only |
-| `confirmByOracle()` | Oracle only |
-| `finalizeAfterDeadline()` | Anyone |
-| `expireIfNotConfirmed()` | Anyone |
-| `expireIfNotFunded()` | Anyone |
-| `arbitratorRelease()` | Arbitrator only |
-| `arbitratorRefund()` | Arbitrator only |
-| `approveMutualRelease()` | Buyer or seller |
-| `approveMutualRefund()` | Buyer or seller |
-| `approveDeadlineExtension()` | Buyer or seller |
-| `approveArbitratorSwap()` | Buyer or seller |
-| `sweepToTreasury()` | Anyone (terminal states only) |
-| `sweepToTreasuryAfterArbWindow()` | Anyone |
-| `sweepStrayToken()` | Oracle only |
+| `createEscrowSimple()` | anyone |
+| `sellerConfirm()` | seller only |
+| `settle()` | anyone when conditions pass |
+| `refundUnderfunded()` | anyone when conditions pass |
+| `approveMutualSettle()` / `approveMutualRefund()` | buyer or seller |
+| `finalizeMutualResolution()` | anyone after override window |
+| `arbSettle()` / `arbRefund()` / `arbVoteSettle()` / `arbVoteRefund()` | arbitrator |
+| `sweepExcess()` / `recoverLatePaymentToken()` / `sweepStrayToken()` | anyone when conditions pass |
 
-## PaymentRouter (On-Chain Enforced Payments)
+## View Functions
 
-| Item | Value |
-|------|-------|
-| **PaymentRouter** | `0xe65CBf11e2F997e3a5Fa2E8c12596C1992d51c95` |
-
-The PaymentRouter stores payment link parameters on-chain. When a payer calls `pay(linkId)`, the contract reads the stored token, recipient, and amount -- the payer cannot alter them. This is used for the "Accept Stablecoins" QR code feature.
-
-### How It Works
-
-1. Merchant creates a payment link via the API (see below)
-2. The oracle registers the link on-chain via `createLink(id, token, recipient, amount)`
-3. Payer visits the payment page, approves the exact token amount to the router, then calls `pay(id)`
-4. The router executes `transferFrom(payer, recipient, amount)` -- enforced on-chain
-
-### Contract ABI
+Important reads:
 
 ```solidity
-function createLink(bytes32 id, address token, address recipient, uint256 amount) external  // owner only
-function pay(bytes32 id) external  // anyone, requires prior ERC-20 approve
-function linkExists(bytes32 id) external view returns (bool)
-function links(bytes32 id) external view returns (address token, address recipient, uint256 amount)
+sellerWallet()
+buyerRefundWallet()
+token()
+targetAmount()
+settlementDate()
+createdAt()
+termsHash()
+arbitrationMode()
+arbitrator1()
+arbitrator2()
+arbitrator3()
+status()
+statusCode()
+pendingOutcome()
+overrideWindowEnd()
+settleVotes()
+refundVotes()
+balance()
+isFunded()
+isTerminal()
+isActivatable()
+isRefundableUnderfunded()
+isSettleable()
+isVotable()
+isInOverrideWindow()
+isFinalizable()
+calculateFee(uint256 amount)
 ```
 
-### Link ID Derivation
+Actionable helper meanings:
 
-The `bytes32 id` is derived deterministically from the off-chain code:
+| Helper | True When |
+|--------|-----------|
+| `isActivatable()` | `CREATED` and fully funded |
+| `isRefundableUnderfunded()` | `CREATED`, after `settlementDate`, underfunded |
+| `isSettleable()` | no-arb, fully funded, after `settlementDate`, non-terminal |
+| `isVotable()` | arbitrated and active or in override window |
+| `isInOverrideWindow()` | pending mutual resolution and before `overrideWindowEnd` |
+| `isFinalizable()` | pending mutual resolution and after `overrideWindowEnd` |
+| `isTerminal()` | `SETTLED` or `REFUNDED` |
 
-```typescript
-import { keccak256, toHex, toBytes } from 'viem';
-const linkId = keccak256(toHex(toBytes(code)));  // code = nanoid(10) from the API
+## Backend / Indexer API
+
+The backend stores lookup codes and terms text, indexes events, and serves
+dashboard data. It is not trusted by the contracts.
+
+Minimum backend env:
+
+```text
+NODE_ENV=production
+CHAIN_ID=42161
+RPC_HTTP=<Arbitrum One HTTP RPC>
+RPC_WSS=<Arbitrum One WSS RPC>
+FACTORY_ADDRESS=<EscrowFactoryV2>
+INDEXER_START_BLOCK=<factory deployment block or current block before first escrow>
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+USDT_ADDRESS=0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9
+POSTGRES_URL=<database URL>
+WEBHOOK_SHARED_SECRET=<shared secret>
+PORT=<backend port>
+ENABLE_SERVER_TXS=false
 ```
 
-### viem Example: Pay a Link
+Only set these if enabling optional server-signed/internal transactions:
 
-```typescript
-import { createPublicClient, createWalletClient, http, keccak256, toHex, toBytes } from 'viem';
-import { arbitrum } from 'viem/chains';
-import { privateKeyToAccount } from 'viem/accounts';
-
-const ROUTER = '0xe65CBf11e2F997e3a5Fa2E8c12596C1992d51c95';
-const USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
-
-const erc20ABI = [{
-  inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }],
-  name: 'approve', outputs: [{ type: 'bool' }], stateMutability: 'nonpayable', type: 'function',
-}] as const;
-
-const routerABI = [{
-  inputs: [{ name: 'id', type: 'bytes32' }],
-  name: 'pay', outputs: [], stateMutability: 'nonpayable', type: 'function',
-}] as const;
-
-const account = privateKeyToAccount('0xPAYER_KEY');
-const publicClient = createPublicClient({ chain: arbitrum, transport: http() });
-const walletClient = createWalletClient({ account, chain: arbitrum, transport: http() });
-
-const code = 'a8Kx3mQ7pR';
-const linkId = keccak256(toHex(toBytes(code)));
-const amount = 100_000_000n; // $100 USDC
-
-// Step 1: Approve router for exact amount
-await walletClient.writeContract({
-  address: USDC, abi: erc20ABI, functionName: 'approve',
-  args: [ROUTER, amount],
-});
-
-// Step 2: Pay via router
-await walletClient.writeContract({
-  address: ROUTER, abi: routerABI, functionName: 'pay',
-  args: [linkId],
-});
+```text
+ENABLE_SERVER_TXS=true
+ORACLE_PRIVATE_KEY=<backend wallet private key>
+REDIS_URL=<redis URL>
 ```
 
-## Payment Links API
+Register wallet-created escrow:
 
-Payment links are created via the Crow backend API. The oracle automatically registers each link on the PaymentRouter contract.
-
-### Create a Payment Link
-
-```
-POST /payment/create
-Content-Type: application/json
-
-{
-  "wallet": "0xRECIPIENT_ADDRESS",
-  "token": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-  "amount": "100000000",
-  "description": "Invoice #42"
-}
-
-Response: { "code": "a8Kx3mQ7pR", "linkId": "0x..." }
-```
-
-### Fetch a Payment Link
-
-```
-GET /payment/:code
-
-Response: {
-  "code": "a8Kx3mQ7pR",
-  "wallet": "0x...",
-  "token": "0x...",
-  "amount": "100000000",
-  "description": "Invoice #42",
-  "onChain": true,
-  "linkId": "0x...",
-  "createdAt": "2026-02-23T..."
-}
-```
-
-The `onChain` field indicates whether the link is registered on the PaymentRouter contract. If `true`, the payer must approve + pay via the router. If `false` (rare, transient), the payer falls back to a direct ERC-20 transfer.
-
-Payment page URL: `https://usecrow.com/p/<code>`
-
-## Escrow Registration API
-
-After creating an escrow on-chain, register it with the backend to get a human-readable lookup code:
-
-```
+```http
 POST /escrow/register
 Content-Type: application/json
 
-{ "txHash": "0x..." }
-
-Response: {
-  "escrow": "0x...",
-  "code": "xK9mT2qPnR",
-  "txHash": "0x...",
-  "token": "0x...",
-  "phase": 0,
-  "confirmDeadline": 1740000000,
-  "arbWindowEnd": 1740600000
-}
+{ "txHash": "0x...", "termsText": "optional deliverables text" }
 ```
 
-### Look Up Escrow by Code
+Status lookup:
 
-```
+```http
 GET /escrow/status/:code
-
-Response: {
-  "escrow": "0x...",
-  "code": "xK9mT2qPnR",
-  "phase": 0,
-  "phaseName": "AwaitingConfirmation",
-  "payout": "0x...",
-  "funder": "0x...",
-  "token": "0x...",
-  "targetAmount": "500000000",
-  "deadline": 1740000000,
-  "confirmed": false,
-  "resolved": false,
-  "expired": false,
-  "isFunded": false,
-  ...
-}
 ```
 
-## Complete Example: Create, Confirm, Fund, Finalize
+Webhook:
 
-```typescript
-import { createPublicClient, createWalletClient, http, parseEventLogs } from 'viem';
-import { arbitrum } from 'viem/chains';
-import { privateKeyToAccount } from 'viem/accounts';
-
-const FACTORY = '0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9';
-const USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
-const ZERO = '0x0000000000000000000000000000000000000000';
-
-const sellerAccount = privateKeyToAccount('0xSELLER_KEY');
-const buyerAccount = privateKeyToAccount('0xBUYER_KEY');
-
-const publicClient = createPublicClient({ chain: arbitrum, transport: http() });
-
-const factoryABI = [{
-  inputs: [
-    { name: '_payout', type: 'address' },
-    { name: '_funder', type: 'address' },
-    { name: '_token', type: 'address' },
-    { name: '_targetAmount', type: 'uint256' },
-    { name: '_deadline', type: 'uint64' },
-    { name: '_arbitrator1', type: 'address' },
-    { name: '_arbitrator2', type: 'address' },
-    { name: '_arbitrator3', type: 'address' },
-  ],
-  name: 'createEscrowSimple',
-  outputs: [{ name: 'escrow', type: 'address' }],
-  stateMutability: 'nonpayable',
-  type: 'function',
-}, {
-  anonymous: false,
-  inputs: [
-    { indexed: true, name: 'escrow', type: 'address' },
-    { indexed: true, name: 'funder', type: 'address' },
-    { indexed: true, name: 'payout', type: 'address' },
-    { indexed: false, name: 'token', type: 'address' },
-    { indexed: false, name: 'targetAmount', type: 'uint256' },
-    { indexed: false, name: 'bondCap', type: 'uint256' },
-    { indexed: false, name: 'deadline', type: 'uint64' },
-    { indexed: false, name: 'createdAt', type: 'uint64' },
-    { indexed: false, name: 'confirmDeadline', type: 'uint64' },
-    { indexed: false, name: 'arbWindowEnd', type: 'uint64' },
-    { indexed: false, name: 'arbitrator1', type: 'address' },
-    { indexed: false, name: 'arbitrator2', type: 'address' },
-    { indexed: false, name: 'arbitrator3', type: 'address' },
-  ],
-  name: 'EscrowCreated',
-  type: 'event',
-}] as const;
-
-const erc20ABI = [{
-  inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }],
-  name: 'transfer', outputs: [{ type: 'bool' }], stateMutability: 'nonpayable', type: 'function',
-}] as const;
-
-const escrowWriteABI = [
-  { inputs: [], name: 'confirm', outputs: [], stateMutability: 'nonpayable', type: 'function' },
-  { inputs: [], name: 'finalizeAfterDeadline', outputs: [], stateMutability: 'nonpayable', type: 'function' },
-] as const;
-
-// --- Step 1: Create escrow (anyone can call) ---
-const deadline = BigInt(Math.floor(Date.now() / 1000) + 7 * 86400);
-const sellerWallet = createWalletClient({ account: sellerAccount, chain: arbitrum, transport: http() });
-
-const createHash = await sellerWallet.writeContract({
-  address: FACTORY, abi: factoryABI, functionName: 'createEscrowSimple',
-  args: [sellerAccount.address, buyerAccount.address, USDC, 100_000_000n, deadline, ZERO, ZERO, ZERO],
-});
-const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
-const escrowAddress = parseEventLogs({
-  abi: factoryABI, logs: createReceipt.logs, eventName: 'EscrowCreated',
-})[0].args.escrow;
-
-// --- Step 2: Seller confirms (within 24h) ---
-await sellerWallet.writeContract({
-  address: escrowAddress, abi: escrowWriteABI, functionName: 'confirm',
-});
-
-// --- Step 3: Buyer funds (direct ERC-20 transfer to escrow) ---
-const buyerWallet = createWalletClient({ account: buyerAccount, chain: arbitrum, transport: http() });
-await buyerWallet.writeContract({
-  address: USDC, abi: erc20ABI, functionName: 'transfer',
-  args: [escrowAddress, 100_000_000n],
-});
-
-// --- Step 4: After deadline, anyone finalizes ---
-// (wait until block.timestamp > deadline)
-await sellerWallet.writeContract({
-  address: escrowAddress, abi: escrowWriteABI, functionName: 'finalizeAfterDeadline',
-});
-// Seller receives $99 (targetAmount - fee), treasury receives $1 fee
+```http
+POST /webhooks/chain
+x-webhook-secret: <WEBHOOK_SHARED_SECRET>
 ```
 
-## Agent Wagers (Betting)
+The webhook/indexer should ingest:
 
-Wagers between agents (or any two parties) are built entirely on the existing escrow primitives. No special contracts are needed -- the escrow contract already supports this use case natively.
+- `EscrowCreated`
+- escrow action events
+- USDC/USDT `Transfer` logs to known escrow addresses
 
-### Concept
+## UI Env
 
-A wager is an escrow where both parties put money in, and an arbitrator decides who gets the pot. The loser's funds go to the winner (minus the standard fee).
-
-### Parameter Mapping
-
-| Wager Concept | Escrow Parameter | Notes |
-|---------------|------------------|-------|
-| **Party A** (creator) | `_payout` | Receives pot if they win (`arbitratorRelease`) |
-| **Party B** (opponent) | `_funder` | Receives pot if they win (`arbitratorRefund`) |
-| **Wager amount** (total pot) | `_targetAmount` | Full pot, e.g. `20_000_000n` for a $10/side bet ($20 total) |
-| **Each side's stake** | `_targetAmount / 2` | Each party transfers half to the escrow address |
-| **Judge** | `_arbitrator1` | Single arbitrator who decides the winner |
-| **Judging panel** | `_arbitrator1`, `_arbitrator2`, `_arbitrator3` | 2-of-3 panel with deadlock breaker |
-| **Deadline** | `_deadline` | Arbitrator must vote before `deadline + 7 days` (arb window) |
-| **Token** | `_token` | USDC or USDT |
-
-### Outcome Mapping
-
-| Result | Arbitrator Call | Effect |
-|--------|-----------------|--------|
-| **Party A wins** | `arbitratorRelease()` | Party A receives `targetAmount - fee` |
-| **Party B wins** | `arbitratorRefund()` | Party B receives `targetAmount` (fee only applies to release) |
-| **No vote before arb window ends** | `sweepToTreasuryAfterArbWindow()` | Funds go to treasury (both parties lose) |
-
-### Lifecycle
-
-```
-1. Party A creates escrow (createEscrowSimple)
-   - _payout = Party A address
-   - _funder = Party B address
-   - _targetAmount = full pot (2x each side's stake)
-   - _arbitrator1 = judge address (or set all 3 for a panel)
-   - _deadline = resolution deadline
-
-2. Party A confirms (confirm())
-   - Must happen within 24 hours of creation
-
-3. Both parties fund their half
-   - Party A: ERC-20 transfer(escrowAddress, targetAmount / 2)
-   - Party B: ERC-20 transfer(escrowAddress, targetAmount / 2)
-   - isFunded() returns true once balance >= targetAmount
-
-4. Arbitrator decides the winner
-   - arbitratorRelease() → Party A wins (receives pot minus fee)
-   - arbitratorRefund()  → Party B wins (receives pot)
-   - Must vote during arb window: [deadline, deadline + 7 days]
+```text
+NEXT_PUBLIC_APP_URL=<app URL>
+NEXT_PUBLIC_FACTORY_ADDRESS=<EscrowFactoryV2>
+NEXT_PUBLIC_RPC_HTTP=<Arbitrum One HTTP RPC>
+INDEXER_API_URL=<backend/indexer URL>
+INDEXER_API_KEY=<WEBHOOK_SHARED_SECRET if using authenticated optional endpoints>
 ```
 
-### Arbitrator Configurations
-
-**Single judge** (simplest): Set `_arbitrator1` to the judge's address, `_arbitrator2` and `_arbitrator3` to `0x0`. The single arbitrator's vote is final.
-
-**2-of-3 panel**: Set all three arbitrator addresses. Arb1 and arb2 both vote. If they agree, the result is final. If they disagree (deadlock), arb3 breaks the tie.
-
-### Complete viem Example: $10/side Wager with Single Arbitrator
-
-```typescript
-import { createPublicClient, createWalletClient, http, parseEventLogs } from 'viem';
-import { arbitrum } from 'viem/chains';
-import { privateKeyToAccount } from 'viem/accounts';
-
-const FACTORY = '0xd8dCaa9704a74FD23bFE675477fC9f9E7deD8cb9';
-const USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
-const ZERO = '0x0000000000000000000000000000000000000000';
-
-const partyA = privateKeyToAccount('0xPARTY_A_KEY');
-const partyB = privateKeyToAccount('0xPARTY_B_KEY');
-const judge  = privateKeyToAccount('0xJUDGE_KEY');
-
-const publicClient = createPublicClient({ chain: arbitrum, transport: http() });
-const walletA = createWalletClient({ account: partyA, chain: arbitrum, transport: http() });
-const walletB = createWalletClient({ account: partyB, chain: arbitrum, transport: http() });
-const walletJudge = createWalletClient({ account: judge, chain: arbitrum, transport: http() });
-
-const WAGER_PER_SIDE = 10_000_000n;  // $10 each
-const TOTAL_POT = WAGER_PER_SIDE * 2n; // $20 total
-const deadline = BigInt(Math.floor(Date.now() / 1000) + 3 * 24 * 60 * 60); // 3 days
-
-const factoryABI = [{
-  inputs: [
-    { name: '_payout', type: 'address' },
-    { name: '_funder', type: 'address' },
-    { name: '_token', type: 'address' },
-    { name: '_targetAmount', type: 'uint256' },
-    { name: '_deadline', type: 'uint64' },
-    { name: '_arbitrator1', type: 'address' },
-    { name: '_arbitrator2', type: 'address' },
-    { name: '_arbitrator3', type: 'address' },
-  ],
-  name: 'createEscrowSimple',
-  outputs: [{ name: 'escrow', type: 'address' }],
-  stateMutability: 'nonpayable',
-  type: 'function',
-}, {
-  anonymous: false,
-  inputs: [
-    { indexed: true, name: 'escrow', type: 'address' },
-    { indexed: false, name: 'payout', type: 'address' },
-    { indexed: false, name: 'funder', type: 'address' },
-    { indexed: false, name: 'token', type: 'address' },
-    { indexed: false, name: 'targetAmount', type: 'uint256' },
-    { indexed: false, name: 'deadline', type: 'uint64' },
-    { indexed: false, name: 'createdAt', type: 'uint64' },
-    { indexed: false, name: 'confirmDeadline', type: 'uint64' },
-    { indexed: false, name: 'arbWindowEnd', type: 'uint64' },
-    { indexed: false, name: 'arbitrator1', type: 'address' },
-    { indexed: false, name: 'arbitrator2', type: 'address' },
-    { indexed: false, name: 'arbitrator3', type: 'address' },
-  ],
-  name: 'EscrowCreated',
-  type: 'event',
-}] as const;
-
-const erc20ABI = [{
-  inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }],
-  name: 'transfer', outputs: [{ type: 'bool' }], stateMutability: 'nonpayable', type: 'function',
-}] as const;
-
-const escrowABI = [
-  { inputs: [], name: 'confirm', outputs: [], stateMutability: 'nonpayable', type: 'function' },
-  { inputs: [], name: 'arbitratorRelease', outputs: [], stateMutability: 'nonpayable', type: 'function' },
-  { inputs: [], name: 'arbitratorRefund', outputs: [], stateMutability: 'nonpayable', type: 'function' },
-  { inputs: [], name: 'isFunded', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
-] as const;
-
-// --- Step 1: Party A creates the wager ---
-const createHash = await walletA.writeContract({
-  address: FACTORY, abi: factoryABI, functionName: 'createEscrowSimple',
-  args: [
-    partyA.address,    // payout (Party A wins → gets pot)
-    partyB.address,    // funder (Party B wins → gets refund)
-    USDC,              // token
-    TOTAL_POT,         // $20 total pot
-    deadline,          // 3 days from now
-    judge.address,     // single arbitrator
-    ZERO,              // no arb2
-    ZERO,              // no arb3
-  ],
-});
-const receipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
-const escrowAddress = parseEventLogs({
-  abi: factoryABI, logs: receipt.logs, eventName: 'EscrowCreated',
-})[0].args.escrow;
-console.log('Wager escrow:', escrowAddress);
-
-// --- Step 2: Party A confirms (within 24h) ---
-await walletA.writeContract({
-  address: escrowAddress, abi: escrowABI, functionName: 'confirm',
-});
-
-// --- Step 3: Both parties fund their half ---
-await walletA.writeContract({
-  address: USDC, abi: erc20ABI, functionName: 'transfer',
-  args: [escrowAddress, WAGER_PER_SIDE], // $10 from Party A
-});
-
-await walletB.writeContract({
-  address: USDC, abi: erc20ABI, functionName: 'transfer',
-  args: [escrowAddress, WAGER_PER_SIDE], // $10 from Party B
-});
-
-// Verify fully funded
-const funded = await publicClient.readContract({
-  address: escrowAddress, abi: escrowABI, functionName: 'isFunded',
-});
-console.log('Funded:', funded); // true
-
-// --- Step 4: Arbitrator decides the winner ---
-// Party A wins:
-await walletJudge.writeContract({
-  address: escrowAddress, abi: escrowABI, functionName: 'arbitratorRelease',
-});
-// Party A receives ~$19.80 ($20 pot minus $0.20 fee)
-
-// OR Party B wins:
-// await walletJudge.writeContract({
-//   address: escrowAddress, abi: escrowABI, functionName: 'arbitratorRefund',
-// });
-// Party B receives $20 (full pot)
-```
-
-### Edge Cases
-
-| Scenario | What Happens |
-|----------|-------------|
-| Only one party funds before deadline | Escrow is not funded. After deadline, call `expireIfNotFunded()` to expire. Funded party can recover via `sweepToTreasury()` after expiry. |
-| Arbitrator never votes | After arb window ends (`deadline + 7 days`), anyone calls `sweepToTreasuryAfterArbWindow()`. Funds go to treasury -- both parties lose. Choose a reliable arbitrator. |
-| Both parties want to cancel | Both call `approveMutualRefund()`. Party B (funder role) receives the full pot back. To split evenly, handle the split off-chain after refund. |
-| Party A also wants to be the arbitrator | Not allowed. Arbitrators cannot be the buyer or seller. Use a neutral third party. |
-
-### Fee Impact on Winnings
-
-The standard fee (1% capped at $1) applies only when `arbitratorRelease()` is called (Party A wins). It is deducted from Party A's payout.
-
-- $20 pot → Party A wins → receives $19.80 (fee = $0.20, which is 1% of $20)
-- $200 pot → Party A wins → receives $199 (fee = $1, capped)
-- $20 pot → Party B wins via `arbitratorRefund()` → receives $20 (no fee on refunds)
-
-### Quick Reference for Agents
-
-To create a wager programmatically, an agent needs:
-
-1. **Own wallet address** (will be `_payout` if creating, or `_funder` if accepting)
-2. **Opponent's wallet address**
-3. **Agreed wager amount per side** (multiply by 2 for `_targetAmount`)
-4. **Arbitrator address(es)** -- a trusted judge both parties agree on
-5. **Deadline** -- unix timestamp by which the arbitrator must begin voting
-6. **USDC or USDT** for the token
-7. Enough tokens to fund their half, plus ETH for gas on Arbitrum (~$0.01-0.05 per tx)
+Legacy `ORACLE_API_URL` and `ORACLE_API_KEY` are accepted as fallback aliases
+until the folder/env rename is completed.

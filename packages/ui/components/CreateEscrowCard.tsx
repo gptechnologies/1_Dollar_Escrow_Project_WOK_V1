@@ -2,35 +2,53 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Loader2, Copy, ExternalLink, Check, ChevronDown, ClipboardPaste, Wallet } from 'lucide-react';
-import { parseEventLogs, type Address } from 'viem';
-import DeadlineDateTimePicker from './DeadlineDateTimePicker';
+import {
+  Loader2,
+  Copy,
+  ExternalLink,
+  Check,
+  ChevronDown,
+  ClipboardPaste,
+  Wallet,
+  CircleDollarSign,
+  ArrowLeft,
+} from 'lucide-react';
+import { startOfDay } from 'date-fns';
+import { keccak256, parseEventLogs, toBytes, type Address, type Hex } from 'viem';
 import ShareModal from './ShareModal';
+import DatePickerField, { dateToEndOfDayTs, parseSlashDate } from './DatePickerField';
+import FieldHelpPopover from './FieldHelpPopover';
 import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
-import { FACTORY_ADDRESS, EscrowFactoryABI, publicClient } from '@/lib/chain';
+import {
+  ARBITRUM_CHAIN_ID,
+  EscrowFactoryABI,
+  getChainConfig,
+  getPublicClient,
+  type SupportedChainId,
+} from '@/lib/chain';
 import { useWalletConnection, encodeCreateEscrowTx } from '@/lib/wallet';
 
 interface CreatedEscrow {
   escrow: string;
   code: string;
   token: string;
-  confirmDeadline: number;
   txHash?: string;
+  chainId: SupportedChainId;
 }
 
-// Utility to shorten Ethereum addresses for preview
-const shortenAddress = (address: string): string => {
-  if (!address || address.length < 10) return address;
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
-};
+const FIELD_HELP = {
+  amount: 'Total Amount for the escrow',
+  buyer: 'Wallet Address that will be funding the escrow',
+  seller: 'Wallet Address that will receive the funds',
+  settlement:
+    'The resolution date. If the escrow is fully funded by 11:59 PM on this date it can be released to the seller (or resolved by arbitrators); if it is underfunded it can be refunded to the buyer.',
+} as const;
 
-// Token options - addresses will be provided by env or hardcoded for now
-const TOKEN_OPTIONS = [
-  { value: 'USDC', label: 'USDC', address: process.env.NEXT_PUBLIC_USDC_ADDRESS || '' },
-  { value: 'USDT', label: 'USDT', address: process.env.NEXT_PUBLIC_USDT_ADDRESS || '' },
-];
+const TOKEN_OPTIONS = ['USDC', 'USDT'] as const;
 
 type CreateEscrowCardProps = {
+  className?: string;
+  chainId?: SupportedChainId;
   initialValues?: {
     amount?: string;
     token?: string;
@@ -43,140 +61,104 @@ type CreateEscrowCardProps = {
 
 type CreateStep = 'form' | 'signing' | 'confirming' | 'registering';
 
-type CardMode = 'escrow' | 'wager';
+const emptyErrors = {
+  amount: '',
+  token: '',
+  fundingAddress: '',
+  counterparty: '',
+  settlementDate: '',
+  arbitrator1: '',
+  arbitrator2: '',
+  arbitrator3: '',
+};
 
-export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProps) {
-  const wallet = useWalletConnection();
-  const [mode, setMode] = useState<CardMode>('escrow');
+function FieldLabel({
+  htmlFor,
+  label,
+  help,
+}: {
+  htmlFor?: string;
+  label: string;
+  help: string;
+}) {
+  return (
+    <label htmlFor={htmlFor} className="rune-frow-label rune-frow-label-with-help">
+      <span>{label}</span>
+      <FieldHelpPopover label={label} description={help} />
+    </label>
+  );
+}
+
+export default function CreateEscrowCard({
+  className = 'w-[320px]',
+  chainId = ARBITRUM_CHAIN_ID,
+  initialValues,
+}: CreateEscrowCardProps) {
+  const chainConfig = getChainConfig(chainId);
+  const wallet = useWalletConnection(chainId);
   const [amount, setAmount] = useState('');
   const [selectedToken, setSelectedToken] = useState('USDC');
   const [fundingAddress, setFundingAddress] = useState('');
   const [counterparty, setCounterparty] = useState('');
-  const [deadlineDate, setDeadlineDate] = useState('');
-  const [deadlineTime, setDeadlineTime] = useState('23:59');
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showAdvancedArbitrationInfo, setShowAdvancedArbitrationInfo] = useState(false);
+  const [settlementDate, setSettlementDate] = useState<Date | undefined>();
+  const [arbitratorsOpen, setArbitratorsOpen] = useState(false);
+  const [termsOpen, setTermsOpen] = useState(false);
+  const [termsText, setTermsText] = useState('');
   const [arbitrator1, setArbitrator1] = useState('');
   const [arbitrator2, setArbitrator2] = useState('');
-  const [arbitrator3, setArbitrator3] = useState('');  // Deadlock arbitrator
+  const [arbitrator3, setArbitrator3] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [createStep, setCreateStep] = useState<CreateStep>('form');
   const [error, setError] = useState('');
   const [createdEscrow, setCreatedEscrow] = useState<CreatedEscrow | null>(null);
   const [copied, setCopied] = useState(false);
-  const [errors, setErrors] = useState({
-    amount: '',
-    token: '',
-    fundingAddress: '',
-    counterparty: '',
-    deadline: '',
-    arbitrator1: '',
-    arbitrator2: '',
-    arbitrator3: '',
-  });
-  // Track whether address fields have been blurred (for showing preview)
-  const [fundingAddressBlurred, setFundingAddressBlurred] = useState(false);
-  const [counterpartyBlurred, setCounterpartyBlurred] = useState(false);
+  const [errors, setErrors] = useState({ ...emptyErrors });
+  const todayStart = startOfDay(new Date());
 
   useEffect(() => {
     if (!initialValues) return;
-
     if (initialValues.amount) setAmount(initialValues.amount);
-    if (initialValues.token && TOKEN_OPTIONS.some((token) => token.value === initialValues.token)) {
+    if (initialValues.token && TOKEN_OPTIONS.some((token) => token === initialValues.token)) {
       setSelectedToken(initialValues.token);
     }
     if (initialValues.funder) setFundingAddress(initialValues.funder);
     if (initialValues.payout) setCounterparty(initialValues.payout);
-    if (initialValues.deadlineDate) setDeadlineDate(initialValues.deadlineDate);
-    if (initialValues.deadlineTime) setDeadlineTime(initialValues.deadlineTime);
+    if (initialValues.deadlineDate) {
+      const parsed = parseSlashDate(initialValues.deadlineDate);
+      if (parsed) setSettlementDate(parsed);
+    }
   }, [initialValues]);
 
-  // Paste from clipboard helper
-  const pasteFromClipboard = async (
-    setter: (value: string) => void,
-    errorKey: keyof typeof errors
-  ) => {
+  const pasteFromClipboard = async (setter: (value: string) => void, errorKey: keyof typeof errors) => {
     try {
       const text = await navigator.clipboard.readText();
       setter(text.trim());
       if (errors[errorKey]) setErrors({ ...errors, [errorKey]: '' });
     } catch {
-      // Clipboard access denied or unavailable
+      /* clipboard unavailable */
     }
   };
 
-  // Validate Ethereum address format
-  const isValidEthAddress = (address: string) => {
-    return /^0x[a-fA-F0-9]{40}$/.test(address);
-  };
-
-  const parseDeadlineDate = (dateStr: string): Date | null => {
-    const match = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
-    if (!match) return null;
-
-    const [, month, day, yearRaw] = match;
-    const yearNum = yearRaw.length === 2 ? 2000 + parseInt(yearRaw) : parseInt(yearRaw);
-    const date = new Date(yearNum, parseInt(month) - 1, parseInt(day));
-
-    if (
-      date.getFullYear() !== yearNum ||
-      date.getMonth() !== parseInt(month) - 1 ||
-      date.getDate() !== parseInt(day)
-    ) {
-      return null;
-    }
-
-    return date;
-  };
-
-  // Combine date and time into a single Date object
-  const combineDateTime = (date: Date | null, timeStr: string): Date | null => {
-    if (!date) return null;
-
-    const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
-    if (!timeMatch) return null;
-
-    const [, hours, minutes] = timeMatch;
-
-    return new Date(
-      date.getFullYear(),
-      date.getMonth(),
-      date.getDate(),
-      parseInt(hours),
-      parseInt(minutes)
-    );
-  };
+  const isValidEthAddress = (address: string) => /^0x[a-fA-F0-9]{40}$/.test(address);
 
   const validateForm = () => {
-    const newErrors = {
-      amount: '',
-      token: '',
-      fundingAddress: '',
-      counterparty: '',
-      deadline: '',
-      arbitrator1: '',
-      arbitrator2: '',
-      arbitrator3: '',
-    };
+    const newErrors = { ...emptyErrors };
     let isValid = true;
+    const nowTs = Math.floor(Date.now() / 1000);
 
-    if (!amount || parseFloat(amount) <= 0) {
-      newErrors.amount = 'Amount must be greater than 0';
+    if (!amount || parseFloat(amount) < 1) {
+      newErrors.amount = 'Amount must be at least $1';
       isValid = false;
     }
 
-    const tokenOption = TOKEN_OPTIONS.find(t => t.value === selectedToken);
+    const tokenOption = chainConfig.tokens[selectedToken as keyof typeof chainConfig.tokens];
     if (!tokenOption || !tokenOption.address) {
       newErrors.token = 'Token address not configured';
       isValid = false;
     }
 
-    const isWager = mode === 'wager';
-    const partyALabel = isWager ? 'Party A' : 'Buyer';
-    const partyBLabel = isWager ? 'Party B' : 'Seller';
-
     if (!fundingAddress) {
-      newErrors.fundingAddress = `${partyALabel} address is required`;
+      newErrors.fundingAddress = 'Buyer address is required';
       isValid = false;
     } else if (!isValidEthAddress(fundingAddress)) {
       newErrors.fundingAddress = 'Invalid Ethereum address format';
@@ -184,7 +166,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     }
 
     if (!counterparty) {
-      newErrors.counterparty = `${partyBLabel} address is required`;
+      newErrors.counterparty = 'Seller address is required';
       isValid = false;
     } else if (!isValidEthAddress(counterparty)) {
       newErrors.counterparty = 'Invalid Ethereum address format';
@@ -192,22 +174,28 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     }
 
     if (fundingAddress && counterparty && fundingAddress.toLowerCase() === counterparty.toLowerCase()) {
-      newErrors.counterparty = `${partyALabel} and ${partyBLabel} must be different`;
+      newErrors.counterparty = 'Buyer and seller must be different';
+      isValid = false;
+    }
+
+    const settlementTs = settlementDate ? dateToEndOfDayTs(settlementDate) : null;
+    if (!settlementDate) {
+      newErrors.settlementDate = 'Settlement date is required';
+      isValid = false;
+    } else if (settlementTs !== null && settlementTs <= nowTs) {
+      newErrors.settlementDate = 'Settlement date must be today or later';
+      isValid = false;
+    } else if (settlementTs !== null && settlementTs > nowTs + 365 * 24 * 60 * 60) {
+      newErrors.settlementDate = 'Settlement date cannot be more than a year away';
       isValid = false;
     }
 
     const arb1 = arbitrator1.trim();
     const arb2 = arbitrator2.trim();
     const arb3 = arbitrator3.trim();
-
     const hasArb1 = !!arb1;
     const hasArb2 = !!arb2;
     const hasArb3 = !!arb3;
-
-    if (isWager && !hasArb1) {
-      newErrors.arbitrator1 = 'A judge is required for wagers';
-      isValid = false;
-    }
 
     if (hasArb2 || hasArb3) {
       if (!hasArb1 || !hasArb2 || !hasArb3) {
@@ -218,70 +206,22 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
       }
     }
 
-    if (arb1) {
-      if (!isValidEthAddress(arb1)) {
-        newErrors.arbitrator1 = 'Invalid Ethereum address format';
+    const checkArb = (val: string, key: 'arbitrator1' | 'arbitrator2' | 'arbitrator3', others: string[]) => {
+      if (!val) return;
+      if (!isValidEthAddress(val)) {
+        newErrors[key] = 'Invalid Ethereum address format';
         isValid = false;
-      } else if (
-        arb1.toLowerCase() === fundingAddress.toLowerCase() ||
-        arb1.toLowerCase() === counterparty.toLowerCase()
-      ) {
-        newErrors.arbitrator1 = `${isWager ? 'Judge' : 'Arbitrator'} must be different from ${partyALabel} and ${partyBLabel}`;
+      } else if (val.toLowerCase() === fundingAddress.toLowerCase() || val.toLowerCase() === counterparty.toLowerCase()) {
+        newErrors[key] = 'Arbitrator must differ from buyer and seller';
         isValid = false;
-      }
-    }
-
-    if (arb2) {
-      if (!isValidEthAddress(arb2)) {
-        newErrors.arbitrator2 = 'Invalid Ethereum address format';
-        isValid = false;
-      } else if (arb2.toLowerCase() === arb1.toLowerCase()) {
-        newErrors.arbitrator2 = 'Arbitrators must be unique';
-        isValid = false;
-      } else if (
-        arb2.toLowerCase() === fundingAddress.toLowerCase() ||
-        arb2.toLowerCase() === counterparty.toLowerCase()
-      ) {
-        newErrors.arbitrator2 = `Arbitrator must be different from ${partyALabel} and ${partyBLabel}`;
+      } else if (others.some((o) => o && o.toLowerCase() === val.toLowerCase())) {
+        newErrors[key] = 'Arbitrators must be unique';
         isValid = false;
       }
-    }
-
-    if (arb3) {
-      if (!isValidEthAddress(arb3)) {
-        newErrors.arbitrator3 = 'Invalid Ethereum address format';
-        isValid = false;
-      } else if (arb3.toLowerCase() === arb1.toLowerCase() || arb3.toLowerCase() === arb2.toLowerCase()) {
-        newErrors.arbitrator3 = 'Arbitrators must be unique';
-        isValid = false;
-      } else if (
-        arb3.toLowerCase() === fundingAddress.toLowerCase() ||
-        arb3.toLowerCase() === counterparty.toLowerCase()
-      ) {
-        newErrors.arbitrator3 = `Arbitrator must be different from ${partyALabel} and ${partyBLabel}`;
-        isValid = false;
-      }
-    }
-
-    if (!deadlineDate) {
-      newErrors.deadline = 'Deadline date is required';
-      isValid = false;
-    } else {
-      const parsedDate = parseDeadlineDate(deadlineDate);
-      if (!parsedDate) {
-        newErrors.deadline = 'Invalid date format';
-        isValid = false;
-      } else {
-        const combinedDateTime = combineDateTime(parsedDate, deadlineTime);
-        if (!combinedDateTime) {
-          newErrors.deadline = 'Invalid time format';
-          isValid = false;
-        } else if (combinedDateTime <= new Date()) {
-          newErrors.deadline = 'Deadline must be in the future';
-          isValid = false;
-        }
-      }
-    }
+    };
+    checkArb(arb1, 'arbitrator1', [arb2, arb3]);
+    checkArb(arb2, 'arbitrator2', [arb1, arb3]);
+    checkArb(arb3, 'arbitrator3', [arb1, arb2]);
 
     setErrors(newErrors);
     return isValid;
@@ -289,18 +229,13 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
-    // Ensure wallet is connected and on Arbitrum before proceeding
     if (!wallet.address) {
       try {
         await wallet.connect();
       } catch {
-        setError(`Please connect your wallet to create ${mode === 'wager' ? 'a wager' : 'an escrow'}`);
-        return;
+        setError('Please connect your wallet to create an escrow');
       }
       return;
     }
@@ -311,22 +246,16 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     setCreateStep('signing');
 
     try {
-      const tokenOption = TOKEN_OPTIONS.find(t => t.value === selectedToken);
+      const tokenOption = chainConfig.tokens[selectedToken as keyof typeof chainConfig.tokens];
       if (!tokenOption || !tokenOption.address) {
         throw new Error('Token address not configured');
       }
 
-      const baseAmount = BigInt(Math.floor(parseFloat(amount) * 1_000_000));
-      const amountInUnits = mode === 'wager' ? baseAmount * BigInt(2) : baseAmount;
-      
-      const parsedDate = parseDeadlineDate(deadlineDate);
-      if (!parsedDate) {
-        setIsLoading(false);
-        setCreateStep('form');
-        return;
-      }
-      const combinedDateTime = combineDateTime(parsedDate, deadlineTime)!;
-      const deadlineTimestamp = Math.floor(combinedDateTime.getTime() / 1000);
+      const amountInUnits = BigInt(Math.floor(parseFloat(amount) * 1_000_000));
+      const settlementTs = dateToEndOfDayTs(settlementDate!);
+
+      const normalizedTerms = termsText.trim();
+      const termsHash: Hex | undefined = normalizedTerms ? keccak256(toBytes(normalizedTerms)) : undefined;
 
       const arb1 = arbitrator1.trim() || undefined;
       const arb2 = arbitrator2.trim() || undefined;
@@ -337,44 +266,34 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
         funder: fundingAddress as Address,
         token: tokenOption.address as Address,
         targetAmount: amountInUnits,
-        deadline: deadlineTimestamp,
+        settlementDate: settlementTs,
+        termsHash,
         arbitrator1: arb1 as Address | undefined,
         arbitrator2: arb2 as Address | undefined,
         arbitrator3: arb3 as Address | undefined,
       });
 
-      // Send tx via wallet
       const txHash = await new Promise<string>((resolve, reject) => {
         if (!window.ethereum || !wallet.address) {
           reject(new Error('Wallet not connected'));
           return;
         }
-        window.ethereum.request({
-          method: 'eth_sendTransaction',
-          params: [{
-            from: wallet.address,
-            to: FACTORY_ADDRESS,
-            data: txData,
-          }],
-        }).then(hash => resolve(hash as string)).catch(reject);
+        window.ethereum
+          .request({
+            method: 'eth_sendTransaction',
+            params: [{ from: wallet.address, to: chainConfig.factoryAddress, data: txData }],
+          })
+          .then((hash) => resolve(hash as string))
+          .catch(reject);
       });
 
       setCreateStep('confirming');
-
-      const receipt = await publicClient.waitForTransactionReceipt({
-        hash: txHash as `0x${string}`,
-      });
-
+      const receipt = await getPublicClient(chainId).waitForTransactionReceipt({ hash: txHash as `0x${string}` });
       if (receipt.status === 'reverted') {
         throw new Error('Transaction reverted on chain');
       }
 
-      const logs = parseEventLogs({
-        abi: EscrowFactoryABI,
-        logs: receipt.logs,
-        eventName: 'EscrowCreated',
-      });
-
+      const logs = parseEventLogs({ abi: EscrowFactoryABI, logs: receipt.logs, eventName: 'EscrowCreated' });
       if (logs.length === 0) {
         throw new Error('EscrowCreated event not found in receipt');
       }
@@ -382,15 +301,12 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
       const event = logs[0].args;
       const escrowAddress = event.escrow as string;
       const tokenAddress = event.token as string;
-      const confirmDeadline = Number(event.confirmDeadline);
 
-      // Register with oracle to get lookup code
       setCreateStep('registering');
-
       const registerResp = await fetch('/api/escrow/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash }),
+        body: JSON.stringify({ chainId, txHash, termsText: normalizedTerms || undefined }),
       });
 
       let code = '';
@@ -401,14 +317,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
         console.warn('Register failed, escrow created on-chain but not indexed yet');
       }
 
-      setCreatedEscrow({
-        escrow: escrowAddress,
-        code,
-        token: tokenAddress,
-        confirmDeadline,
-        txHash,
-      });
-
+      setCreatedEscrow({ escrow: escrowAddress, code, token: tokenAddress, txHash, chainId });
     } catch (err: unknown) {
       console.error('Create escrow error:', err);
       const errObj = err as { code?: number; message?: string };
@@ -431,8 +340,7 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     }
   };
 
-  const resetForm = (forMode?: CardMode) => {
-    const targetMode = forMode ?? mode;
+  const resetForm = () => {
     setCreatedEscrow(null);
     setAmount('');
     setSelectedToken('USDC');
@@ -441,105 +349,59 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
     setArbitrator1('');
     setArbitrator2('');
     setArbitrator3('');
-    setShowAdvanced(targetMode === 'wager');
-    setShowAdvancedArbitrationInfo(false);
-    setDeadlineDate('');
-    setDeadlineTime('23:59');
-    setFundingAddressBlurred(false);
-    setCounterpartyBlurred(false);
-    setErrors({
-      amount: '',
-      token: '',
-      fundingAddress: '',
-      counterparty: '',
-      deadline: '',
-      arbitrator1: '',
-      arbitrator2: '',
-      arbitrator3: '',
-    });
+    setTermsText('');
+    setSettlementDate(undefined);
+    setArbitratorsOpen(false);
+    setTermsOpen(false);
+    setErrors({ ...emptyErrors });
     setError('');
   };
 
-  const handleModeSwitch = (newMode: CardMode) => {
-    if (newMode === mode) return;
-    setMode(newMode);
-    resetForm(newMode);
-  };
+  const isFormValid =
+    amount && fundingAddress && counterparty && settlementDate && parseFloat(amount) >= 1;
 
-  const isFormValid = amount && fundingAddress && counterparty && deadlineDate && deadlineTime && parseFloat(amount) > 0
-    && (mode === 'escrow' || arbitrator1.trim());
-
-  // Show success state with escrow address
   if (createdEscrow) {
     const hasCode = !!createdEscrow.code;
-    const confirmShareUrl = hasCode ? buildShareUrl(createdEscrow.code, {
-      action: 'confirm',
-      role: 'seller',
-    }) : '';
-    const confirmWalletUrls = hasCode ? buildWalletShareUrls(createdEscrow.code, {
-      action: 'confirm',
-      role: 'seller',
-    }) : { metamask: '', coinbase: '' };
-    const fundShareUrl = hasCode ? buildShareUrl(createdEscrow.code, {
-      action: 'fund',
-      role: 'buyer',
-    }) : '';
-    const fundWalletUrls = hasCode ? buildWalletShareUrls(createdEscrow.code, {
-      action: 'fund',
-      role: 'buyer',
-    }) : { metamask: '', coinbase: '' };
+    const confirmShareUrl = hasCode ? buildShareUrl(createdEscrow.code, { action: 'sellerConfirm', role: 'seller' }) : '';
+    const confirmWalletUrls = hasCode
+      ? buildWalletShareUrls(createdEscrow.code, { action: 'sellerConfirm', role: 'seller' })
+      : { metamask: '', coinbase: '' };
+    const fundShareUrl = hasCode ? buildShareUrl(createdEscrow.code, { action: 'fund', role: 'buyer' }) : '';
+    const fundWalletUrls = hasCode
+      ? buildWalletShareUrls(createdEscrow.code, { action: 'fund', role: 'buyer' })
+      : { metamask: '', coinbase: '' };
 
     return (
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="relative z-30 w-[320px]"
+        className={`relative z-30 ${className}`}
       >
-        <div className="surface-card p-5">
+        <div className="surface-card rune-create-card p-5">
           <div className="text-center mb-4">
             <div className="w-12 h-12 bg-[#0BB89A]/20 rounded-full flex items-center justify-center mx-auto mb-3">
               <Check className="w-6 h-6 text-[#0BB89A]" />
             </div>
-            <h2 className="text-lg font-bold text-white">
-              {mode === 'wager' ? 'Wager Created!' : 'Escrow Created!'}
-            </h2>
+            <h2 className="text-lg font-bold text-white">Escrow Created!</h2>
             <p className="text-xs text-white/70 mt-1">
-              {mode === 'wager'
-                ? 'You are done with setup. Now Party B must confirm.'
-                : 'You are done with setup. Now the seller must confirm.'}
+              Next: the buyer funds it, then the seller confirms.
             </p>
           </div>
 
-          {/* Escrow Address */}
           <div className="bg-white/10 rounded-lg p-3 mb-3">
-            <label className="block text-xs font-semibold text-white/70 mb-1.5">
-              Escrow Address
-            </label>
+            <label className="block text-xs font-semibold text-white/70 mb-1.5">Escrow Address</label>
             <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs font-mono text-[#0BB89A] break-all">
-                {createdEscrow.escrow}
-              </code>
-              <button
-                onClick={copyAddress}
-                className="p-1.5 hover:bg-white/10 rounded transition-colors"
-                title="Copy address"
-              >
-                {copied ? (
-                  <Check className="w-4 h-4 text-[#0BB89A]" />
-                ) : (
-                  <Copy className="w-4 h-4 text-white/70" />
-                )}
+              <code className="flex-1 text-xs font-mono text-[#0BB89A] break-all">{createdEscrow.escrow}</code>
+              <button onClick={copyAddress} className="p-1.5 hover:bg-white/10 rounded transition-colors" title="Copy address">
+                {copied ? <Check className="w-4 h-4 text-[#0BB89A]" /> : <Copy className="w-4 h-4 text-white/70" />}
               </button>
             </div>
           </div>
 
-          {/* Code */}
           {hasCode && (
             <div className="bg-white/10 rounded-lg p-3 mb-3">
-              <label className="block text-xs font-semibold text-white/70 mb-1.5">
-                Lookup Code
-              </label>
+              <label className="block text-xs font-semibold text-white/70 mb-1.5">Lookup Code</label>
               <code className="text-sm font-mono text-white">{createdEscrow.code}</code>
             </div>
           )}
@@ -552,410 +414,248 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             </div>
           )}
 
-          {/* Plain-English next steps */}
           <div className="bg-[#0BB89A]/10 rounded-lg p-3 mb-4 border border-[#0BB89A]/30">
             <h3 className="text-xs font-semibold text-[#0BB89A] mb-2">What should happen next</h3>
-            {mode === 'wager' ? (
-              <ol className="text-xs text-white/80 space-y-1.5">
-                <li><span className="text-[#0BB89A] font-bold">1.</span> Share the confirm link with Party B.</li>
-                <li><span className="text-[#0BB89A] font-bold">2.</span> Party B confirms participation.</li>
-                <li><span className="text-[#0BB89A] font-bold">3.</span> Both parties fund {amount} {selectedToken} each (total pot: {(parseFloat(amount || '0') * 2).toFixed(2)}).</li>
-                <li><span className="text-[#0BB89A] font-bold">4.</span> The judge decides the winner.</li>
-              </ol>
-            ) : (
-              <ol className="text-xs text-white/80 space-y-1.5">
-                <li><span className="text-[#0BB89A] font-bold">1.</span> Share the seller confirm link below.</li>
-                <li><span className="text-[#0BB89A] font-bold">2.</span> Seller confirms escrow participation.</li>
-                <li><span className="text-[#0BB89A] font-bold">3.</span> Buyer funds {amount} {selectedToken}.</li>
-                <li><span className="text-[#0BB89A] font-bold">4.</span> After deadline, escrow can be finalized and funds are released.</li>
-              </ol>
-            )}
+            <ol className="text-xs text-white/80 space-y-1.5">
+              <li><span className="text-[#0BB89A] font-bold">1.</span> Buyer funds {amount} {selectedToken} into the escrow.</li>
+              <li><span className="text-[#0BB89A] font-bold">2.</span> Seller confirms to activate the escrow.</li>
+              <li><span className="text-[#0BB89A] font-bold">3.</span> After the settlement date, funds release to the seller.</li>
+            </ol>
           </div>
 
-          {hasCode && <div className="grid grid-cols-1 gap-2 mb-3">
-            <p className="text-[11px] text-white/65">
-              {mode === 'wager' ? 'Party B action: send this link for them to confirm.' : 'Seller action: this link is for the seller to confirm.'}
-            </p>
-            <ShareModal
-              shareUrl={confirmShareUrl}
-              walletUrls={confirmWalletUrls}
-              title="Share confirm link"
-              description={mode === 'wager' ? 'Send to Party B to confirm wager participation.' : 'Send to seller to confirm escrow participation.'}
-              triggerLabel={mode === 'wager' ? 'Share Party B confirm link' : 'Share seller confirm link'}
-              triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
-            />
-            <p className="text-[11px] text-white/65 mt-1">
-              {mode === 'wager' ? 'Funding: share this so both parties can fund their half.' : 'Buyer action: share this after seller confirms so buyer can fund.'}
-            </p>
-            <ShareModal
-              shareUrl={fundShareUrl}
-              walletUrls={fundWalletUrls}
-              title="Share funding link"
-              description={mode === 'wager' ? 'Send to both parties to fund the wager.' : 'Send to buyer to fund this escrow.'}
-              triggerLabel={mode === 'wager' ? 'Share funding link' : 'Share buyer funding link'}
-              triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
-            />
-          </div>}
+          {hasCode && (
+            <div className="grid grid-cols-1 gap-2 mb-3">
+              <p className="text-[11px] text-white/65">Buyer: share this so they can fund the escrow.</p>
+              <ShareModal
+                shareUrl={fundShareUrl}
+                walletUrls={fundWalletUrls}
+                title="Share funding link"
+                description="Send to the buyer to fund this escrow."
+                triggerLabel="Share buyer funding link"
+                triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+              />
+              <p className="text-[11px] text-white/65 mt-1">Seller: share this so they can confirm once funded.</p>
+              <ShareModal
+                shareUrl={confirmShareUrl}
+                walletUrls={confirmWalletUrls}
+                title="Share confirm link"
+                description="Send to the seller to confirm the escrow."
+                triggerLabel="Share seller confirm link"
+                triggerClassName="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+              />
+            </div>
+          )}
 
-          {/* View on Arbiscan */}
           <a
-            href={`https://arbiscan.io/address/${createdEscrow.escrow}`}
+            href={`${getChainConfig(createdEscrow.chainId).explorerBaseUrl}/address/${createdEscrow.escrow}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center justify-center gap-2 w-full py-2 text-sm text-white/70 hover:text-white transition-colors"
           >
-            View on Arbiscan <ExternalLink className="w-3.5 h-3.5" />
+            View on {getChainConfig(createdEscrow.chainId).chainId === 1 ? 'Etherscan' : 'Arbiscan'} <ExternalLink className="w-3.5 h-3.5" />
           </a>
 
-          {/* Create Another */}
           <button
-            onClick={() => resetForm()}
+            onClick={resetForm}
             className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-[#0BB89A] hover:bg-[#0BB89A]/90 active:scale-[0.99] transition-all mt-3"
           >
-            {mode === 'wager' ? 'Create Another Wager' : 'Create Another Escrow'}
+            Create Another Escrow
           </button>
         </div>
       </motion.div>
     );
   }
 
+  const arbFields = [
+    { id: 'arbitrator1' as const, label: 'Arbitrator 1', value: arbitrator1, set: setArbitrator1, err: errors.arbitrator1 },
+    { id: 'arbitrator2' as const, label: 'Arbitrator 2', value: arbitrator2, set: setArbitrator2, err: errors.arbitrator2 },
+    { id: 'arbitrator3' as const, label: 'Arbitrator 3', value: arbitrator3, set: setArbitrator3, err: errors.arbitrator3 },
+  ];
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
-      className="relative z-30 w-[320px]"
+      className={`relative z-30 ${className}`}
     >
-      <div className="surface-card p-5">
-        {/* Mode toggle */}
-        <div className="flex rounded-lg border border-white/40 overflow-hidden mb-4">
-          {(['escrow', 'wager'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => handleModeSwitch(m)}
-              className={`flex-1 py-2 text-sm font-semibold transition-colors ${
-                mode === m
-                  ? 'bg-[#0BB89A] text-white'
-                  : 'bg-white/10 text-white/70 hover:bg-white/20'
-              }`}
-            >
-              {m === 'escrow' ? 'Escrow' : 'Wager'}
-            </button>
-          ))}
-        </div>
-
-        <h2 className="text-lg font-bold text-white mb-3">
-          {mode === 'wager' ? 'Create Wager' : 'Create Escrow'}
-        </h2>
-        
+      <div className="surface-card rune-create-card">
         {error && (
-          <div className="mb-3 p-2.5 bg-red-500/20 border border-red-500/50 rounded-lg">
-            <p className="text-xs text-red-300">{error}</p>
+          <div className="rune-create-error">
+            <p>{error}</p>
           </div>
         )}
-        
-        <form onSubmit={handleSubmit} className="space-y-3">
-          {/* Amount and Token */}
-          <div className="flex gap-2">
-            <div className="flex-1">
-              <label htmlFor="amount" className="block text-xs font-semibold text-white/90 mb-1">
-                {mode === 'wager' ? 'Wager (per side)' : 'Amount'}
-              </label>
-              <input
-                type="number"
-                id="amount"
-                value={amount}
-                onChange={(e) => {
-                  setAmount(e.target.value);
-                  if (errors.amount) setErrors({ ...errors, amount: '' });
-                }}
-                placeholder={mode === 'wager' ? '10.00' : '100.00'}
-                step="0.01"
-                min="0"
-                className={`w-full px-2.5 py-2.5 md:py-2 rounded-lg focus:outline-none transition-colors surface-input text-white text-sm placeholder:text-white/50 ${
-                  errors.amount ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-                }`}
-                required
-              />
-              {mode === 'wager' && amount && parseFloat(amount) > 0 && (
-                <p className="mt-0.5 text-[10px] text-white/50">
-                  Total pot: {(parseFloat(amount) * 2).toFixed(2)} {selectedToken}
-                </p>
-              )}
-              {errors.amount && (
-                <p className="mt-0.5 text-xs text-red-400">{errors.amount}</p>
-              )}
-            </div>
-            
-            {/* Token - Segmented control on mobile, select on desktop */}
-            <div className="w-28 md:w-24">
-              <label htmlFor="token" className="block text-xs font-semibold text-white/90 mb-1">
-                Token
-              </label>
-              {/* Mobile: Segmented control */}
-              <div className="md:hidden flex rounded-lg border border-white/40 overflow-hidden h-[42px]">
-                {TOKEN_OPTIONS.map((token) => (
-                  <button
-                    key={token.value}
-                    type="button"
-                    onClick={() => {
-                      setSelectedToken(token.value);
+
+        <form onSubmit={handleSubmit} className="rune-cform">
+          {/* Amount + token */}
+          <div className="rune-frow rune-frow-full">
+            <FieldLabel htmlFor="amount" label="Amount" help={FIELD_HELP.amount} />
+            <div className="rune-frow-control">
+              <div className="rune-amount-control">
+                <input
+                  type="number"
+                  id="amount"
+                  value={amount}
+                  onChange={(e) => {
+                    setAmount(e.target.value);
+                    if (errors.amount) setErrors({ ...errors, amount: '' });
+                  }}
+                  placeholder="0.00"
+                  step="0.01"
+                  min="1"
+                  className="rune-input"
+                  required
+                />
+                <div className="rune-token">
+                  <CircleDollarSign size={15} />
+                  <select
+                    id="token"
+                    value={selectedToken}
+                    onChange={(e) => {
+                      setSelectedToken(e.target.value);
                       if (errors.token) setErrors({ ...errors, token: '' });
                     }}
-                    className={`flex-1 text-sm font-medium transition-colors ${
-                      selectedToken === token.value
-                        ? 'bg-[#0BB89A] text-white'
-                        : 'bg-white/10 text-white/70 hover:bg-white/20'
-                    }`}
+                    aria-label="Token"
                   >
-                    {token.label}
-                  </button>
-                ))}
+                    {TOKEN_OPTIONS.map((token) => (
+                      <option key={token} value={token}>
+                        {token}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={14} />
+                </div>
               </div>
-              {/* Desktop: Select dropdown */}
-              <select
-                id="token"
-                value={selectedToken}
-                onChange={(e) => {
-                  setSelectedToken(e.target.value);
-                  if (errors.token) setErrors({ ...errors, token: '' });
-                }}
-                className={`hidden md:block w-full px-2 py-2 rounded-lg focus:outline-none transition-colors surface-input text-white text-sm cursor-pointer ${
-                  errors.token ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-                }`}
-              >
-                {TOKEN_OPTIONS.map((token) => (
-                  <option key={token.value} value={token.value} className="bg-gray-800 text-white">
-                    {token.label}
-                  </option>
-                ))}
-              </select>
-              {errors.token && (
-                <p className="mt-0.5 text-xs text-red-400">{errors.token}</p>
+              {(errors.amount || errors.token) && (
+                <p className="rune-field-error">{errors.amount || errors.token}</p>
               )}
             </div>
           </div>
 
-          {/* Buyer Address (Funding Address) */}
-          <div>
-            <label htmlFor="fundingAddress" className="block text-xs font-semibold text-white/90 mb-1">
-              {mode === 'wager' ? 'Party A Wallet (Creator)' : 'Buyer Wallet Address (Funder)'}
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                id="fundingAddress"
-                value={fundingAddress}
-                onChange={(e) => {
-                  setFundingAddress(e.target.value);
-                  setFundingAddressBlurred(false);
-                  if (errors.fundingAddress) setErrors({ ...errors, fundingAddress: '' });
-                }}
-                onBlur={() => setFundingAddressBlurred(true)}
-                onFocus={() => setFundingAddressBlurred(false)}
-                placeholder="0x..."
-                className={`w-full px-2.5 py-2.5 md:py-2 pr-10 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
-                  errors.fundingAddress ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-                }`}
-                required
-              />
-              {/* Paste button (mobile-first, visible on all) */}
-              <button
-                type="button"
-                onClick={() => pasteFromClipboard(setFundingAddress, 'fundingAddress')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-white/50 hover:text-white/80 transition-colors"
-                title="Paste from clipboard"
-              >
-                <ClipboardPaste className="w-4 h-4" />
-              </button>
+          {/* Buyer */}
+          <div className="rune-frow">
+            <FieldLabel htmlFor="fundingAddress" label="Buyer Address" help={FIELD_HELP.buyer} />
+            <div className="rune-frow-control">
+              <div className="rune-input-wrap">
+                <input
+                  type="text"
+                  id="fundingAddress"
+                  value={fundingAddress}
+                  onChange={(e) => {
+                    setFundingAddress(e.target.value);
+                    if (errors.fundingAddress) setErrors({ ...errors, fundingAddress: '' });
+                  }}
+                  placeholder="0x..."
+                  className="rune-input rune-input-mono"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => pasteFromClipboard(setFundingAddress, 'fundingAddress')}
+                  title="Paste from clipboard"
+                  aria-label="Paste buyer address"
+                >
+                  <ClipboardPaste className="w-4 h-4" />
+                </button>
+              </div>
+              {errors.fundingAddress && <p className="rune-field-error">{errors.fundingAddress}</p>}
             </div>
-            {/* Address preview on blur */}
-            {fundingAddressBlurred && fundingAddress && isValidEthAddress(fundingAddress) && (
-              <p className="mt-0.5 text-[10px] text-white/50 font-mono">{shortenAddress(fundingAddress)}</p>
-            )}
-            {errors.fundingAddress && (
-              <p className="mt-0.5 text-xs text-red-400">{errors.fundingAddress}</p>
-            )}
           </div>
 
-          {/* Seller Address (Counterparty/Payout) */}
-          <div>
-            <label htmlFor="counterparty" className="block text-xs font-semibold text-white/90 mb-1">
-              {mode === 'wager' ? 'Party B Wallet (Opponent)' : 'Seller Wallet Address (Payout)'}
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                id="counterparty"
-                value={counterparty}
-                onChange={(e) => {
-                  setCounterparty(e.target.value);
-                  setCounterpartyBlurred(false);
-                  if (errors.counterparty) setErrors({ ...errors, counterparty: '' });
-                }}
-                onBlur={() => setCounterpartyBlurred(true)}
-                onFocus={() => setCounterpartyBlurred(false)}
-                placeholder="0x..."
-                className={`w-full px-2.5 py-2.5 md:py-2 pr-10 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
-                  errors.counterparty ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-                }`}
-                required
-              />
-              {/* Paste button */}
-              <button
-                type="button"
-                onClick={() => pasteFromClipboard(setCounterparty, 'counterparty')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-white/50 hover:text-white/80 transition-colors"
-                title="Paste from clipboard"
-              >
-                <ClipboardPaste className="w-4 h-4" />
-              </button>
+          {/* Seller */}
+          <div className="rune-frow">
+            <FieldLabel htmlFor="counterparty" label="Seller Address" help={FIELD_HELP.seller} />
+            <div className="rune-frow-control">
+              <div className="rune-input-wrap">
+                <input
+                  type="text"
+                  id="counterparty"
+                  value={counterparty}
+                  onChange={(e) => {
+                    setCounterparty(e.target.value);
+                    if (errors.counterparty) setErrors({ ...errors, counterparty: '' });
+                  }}
+                  placeholder="0x..."
+                  className="rune-input rune-input-mono"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => pasteFromClipboard(setCounterparty, 'counterparty')}
+                  title="Paste from clipboard"
+                  aria-label="Paste seller address"
+                >
+                  <ClipboardPaste className="w-4 h-4" />
+                </button>
+              </div>
+              {errors.counterparty && <p className="rune-field-error">{errors.counterparty}</p>}
             </div>
-            {/* Address preview on blur */}
-            {counterpartyBlurred && counterparty && isValidEthAddress(counterparty) && (
-              <p className="mt-0.5 text-[10px] text-white/50 font-mono">{shortenAddress(counterparty)}</p>
-            )}
-            {errors.counterparty && (
-              <p className="mt-0.5 text-xs text-red-400">{errors.counterparty}</p>
-            )}
           </div>
 
-          <DeadlineDateTimePicker
-            deadline={deadlineDate}
-            setDeadline={(value) => {
-              setDeadlineDate(value);
-              if (errors.deadline) setErrors({ ...errors, deadline: '' });
-            }}
-            deadlineTime={deadlineTime}
-            setDeadlineTime={(value) => {
-              setDeadlineTime(value);
-              if (errors.deadline) setErrors({ ...errors, deadline: '' });
-            }}
-            error={errors.deadline}
-            clearError={() => {
-              if (errors.deadline) setErrors({ ...errors, deadline: '' });
-            }}
-          />
+          {/* Settlement Date */}
+          <div className="rune-frow">
+            <FieldLabel label="Settlement Date" help={FIELD_HELP.settlement} />
+            <div className="rune-frow-control">
+              <DatePickerField
+                id="settlementDate"
+                value={settlementDate}
+                onChange={(date) => {
+                  setSettlementDate(date);
+                  if (errors.settlementDate) setErrors({ ...errors, settlementDate: '' });
+                }}
+                placeholder="Select settlement date"
+                minDate={todayStart}
+              />
+              {errors.settlementDate && <p className="rune-field-error">{errors.settlementDate}</p>}
+            </div>
+          </div>
 
-          {/* Advanced - Arbitration */}
-          <div>
+          {/* Optional Arbitrators (collapsible) */}
+          <div className="rune-frow rune-frow-full rune-arb-section">
             <button
               type="button"
-              onClick={() => {
-                if (mode === 'wager') return;
-                setShowAdvanced((prev) => {
-                  const next = !prev;
-                  if (!next) setShowAdvancedArbitrationInfo(false);
-                  return next;
-                });
-              }}
-              className={`flex w-full items-center justify-between text-xs font-semibold text-white/80 hover:text-white transition-colors py-1 ${
-                mode === 'wager' ? 'cursor-default' : ''
-              }`}
+              className="rune-arb-toggle"
+              onClick={() => setArbitratorsOpen((open) => !open)}
+              aria-expanded={arbitratorsOpen}
+              aria-controls="arbitrators-body"
             >
-              {mode === 'wager' ? 'Judge / Arbitrator(s) (required)' : 'Add arbitrators (optional)'}
-              {mode !== 'wager' && (
-                <ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
-              )}
+              <span className="rune-arb-toggle-label">
+                Optional Arbitrators <small>(up to 3)</small>
+              </span>
+              <ChevronDown size={18} className={`rune-arb-chevron${arbitratorsOpen ? ' open' : ''}`} aria-hidden />
             </button>
-
-            {showAdvanced && (
-              <div className="mt-2 rounded-lg border border-white/20 bg-white/10 p-2.5 space-y-2">
-                <div>
-                  <label htmlFor="arbitrator1" className="block text-[11px] font-semibold text-white/90 mb-1">
-                    {mode === 'wager' ? 'Judge' : 'Arbitrator #1'}
-                  </label>
-                  <input
-                    type="text"
-                    id="arbitrator1"
-                    value={arbitrator1}
-                    onChange={(e) => {
-                      setArbitrator1(e.target.value);
-                      if (errors.arbitrator1) setErrors({ ...errors, arbitrator1: '' });
-                    }}
-                    placeholder="0x..."
-                    className={`w-full px-2.5 py-2 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
-                      errors.arbitrator1 ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-                    }`}
-                  />
-                  {errors.arbitrator1 && (
-                    <p className="mt-0.5 text-xs text-red-400">{errors.arbitrator1}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="arbitrator2" className="block text-[11px] font-semibold text-white/90 mb-1">
-                    Arbitrator #2
-                  </label>
-                  <input
-                    type="text"
-                    id="arbitrator2"
-                    value={arbitrator2}
-                    onChange={(e) => {
-                      setArbitrator2(e.target.value);
-                      if (errors.arbitrator2) setErrors({ ...errors, arbitrator2: '' });
-                    }}
-                    placeholder="0x..."
-                    className={`w-full px-2.5 py-2 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
-                      errors.arbitrator2 ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-                    }`}
-                  />
-                  {errors.arbitrator2 && (
-                    <p className="mt-0.5 text-xs text-red-400">{errors.arbitrator2}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="arbitrator3" className="block text-[11px] font-semibold text-white/90 mb-1">
-                    Arbitrator #3 (Deadlock Breaker)
-                  </label>
-                  <input
-                    type="text"
-                    id="arbitrator3"
-                    value={arbitrator3}
-                    onChange={(e) => {
-                      setArbitrator3(e.target.value);
-                      if (errors.arbitrator3) setErrors({ ...errors, arbitrator3: '' });
-                    }}
-                    placeholder="0x..."
-                    className={`w-full px-2.5 py-2 rounded-lg focus:outline-none transition-colors font-mono text-xs surface-input text-white placeholder:text-white/50 ${
-                      errors.arbitrator3 ? 'border-red-300 focus:border-red-500' : 'border-white/40 focus:border-[#0BB89A] focus:ring-2 focus:ring-[#0BB89A]/50 focus:bg-white/30'
-                    }`}
-                  />
-                  {errors.arbitrator3 && (
-                    <p className="mt-0.5 text-xs text-red-400">{errors.arbitrator3}</p>
-                  )}
-                </div>
-
-                <p className="text-[10px] text-white/70">
-                  {mode === 'wager' ? (
-                    <>
-                      1 judge: they decide the winner. The loser&apos;s funds go to the winner.
-                      <br /><br />
-                      3 judges: 2 of 3 must agree. The 3rd breaks a tie.
-                    </>
-                  ) : (
-                    <>
-                      1 arbitrator: they can release funds to either side if there&apos;s a dispute.
-                      <br /><br />
-                      3 arbitrators: 2 of 3 must agree. The 3rd acts as a tiebreaker when needed.
-                    </>
-                  )}
-                </p>
-
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setShowAdvancedArbitrationInfo((prev) => !prev)}
-                    className="flex w-full items-center justify-between text-[10px] font-semibold text-white/70 hover:text-white transition-colors py-0.5"
-                  >
-                    Advanced
-                    <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAdvancedArbitrationInfo ? 'rotate-180' : ''}`} />
-                  </button>
-                  {showAdvancedArbitrationInfo && (
-                    <p className="mt-1 text-[10px] text-white/70">
-                      If no decision is made before the arbitration window ends, funds move to the contract&apos;s recovery address for manual resolution.
+            {arbitratorsOpen && (
+              <div className="rune-arb-body" id="arbitrators-body">
+                <div className="rune-arb-list">
+                  {arbFields.map((field) => (
+                    <div className="rune-arb-row" key={field.id}>
+                      <span className="rune-arb-label">{field.label}</span>
+                      <div className="rune-input-wrap">
+                        <input
+                          type="text"
+                          id={field.id}
+                          value={field.value}
+                          onChange={(e) => {
+                            field.set(e.target.value);
+                            if (errors[field.id]) setErrors({ ...errors, [field.id]: '' });
+                          }}
+                          placeholder="0x..."
+                          className="rune-input rune-input-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => pasteFromClipboard(field.set, field.id)}
+                          title="Paste from clipboard"
+                          aria-label={`Paste ${field.label}`}
+                        >
+                          <ClipboardPaste className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {(errors.arbitrator1 || errors.arbitrator2 || errors.arbitrator3) && (
+                    <p className="rune-field-error">
+                      {errors.arbitrator1 || errors.arbitrator2 || errors.arbitrator3}
                     </p>
                   )}
                 </div>
@@ -963,59 +663,74 @@ export default function CreateEscrowCard({ initialValues }: CreateEscrowCardProp
             )}
           </div>
 
-          {/* Submit / Wallet Button */}
-          {!wallet.address ? (
+          {/* Terms (collapsible) */}
+          <div className="rune-frow rune-frow-full rune-arb-section rune-terms-section">
             <button
               type="button"
-              onClick={() => wallet.connect()}
-              className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-[#0BB89A] hover:bg-[#0BB89A]/90 shadow-lg hover:shadow-xl hover:shadow-[#0BB89A]/20 backdrop-blur-sm active:scale-[0.99] transition-all flex items-center justify-center gap-2"
+              className="rune-arb-toggle"
+              onClick={() => setTermsOpen((open) => !open)}
+              aria-expanded={termsOpen}
+              aria-controls="terms-body"
             >
-              <Wallet className="w-4 h-4" />
-              Connect Wallet to Create
+              <span className="rune-arb-toggle-label">
+                Terms / Description <small>(optional)</small>
+              </span>
+              <ChevronDown size={18} className={`rune-arb-chevron${termsOpen ? ' open' : ''}`} aria-hidden />
             </button>
-          ) : wallet.chainId !== 42161 ? (
-            <button
-              type="button"
-              onClick={() => wallet.switchChain()}
-              className="w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white bg-yellow-500 hover:bg-yellow-400 active:scale-[0.99] transition-all"
-            >
-              Switch to Arbitrum
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={!isFormValid || isLoading}
-              className={`w-full py-2.5 px-3 rounded-lg font-semibold text-sm text-white active:scale-[0.99] transition-all ${
-                isFormValid && !isLoading
-                  ? 'bg-[#0BB89A] hover:bg-[#0BB89A]/90 shadow-lg hover:shadow-xl hover:shadow-[#0BB89A]/20 backdrop-blur-sm'
-                  : 'bg-gray-400/50 cursor-not-allowed backdrop-blur-sm'
-              }`}
-            >
-              {isLoading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  {createStep === 'signing' && 'Sign in wallet...'}
-                  {createStep === 'confirming' && 'Confirming on chain...'}
-                  {createStep === 'registering' && (mode === 'wager' ? 'Registering wager...' : 'Registering escrow...')}
-                </span>
-              ) : (
-                mode === 'wager' ? 'Create Wager' : 'Create Escrow'
-              )}
-            </button>
-          )}
-        </form>
+            {termsOpen && (
+              <div className="rune-arb-body rune-terms-body" id="terms-body">
+                <textarea
+                  id="termsText"
+                  value={termsText}
+                  onChange={(e) => setTermsText(e.target.value)}
+                  placeholder="e.g., Deliver product, quality checks, payment terms..."
+                  className="rune-input rune-textarea"
+                  rows={3}
+                />
+              </div>
+            )}
+          </div>
 
-        {/* Info - lower contrast on mobile */}
-        <div className="mt-3 p-2.5 bg-white/5 md:bg-white/10 rounded-lg border border-white/10 md:border-white/20 backdrop-blur-sm">
-          <p className="text-[10px] text-white/60 md:text-white/80 leading-relaxed">
-            <strong className="text-white/80 md:text-white">Fees:</strong> 1% fee{mode === 'wager' ? ' on winnings' : ''}, capped at $1.
-            <br />
-            <strong className="text-white/80 md:text-white">Tip:</strong>{' '}
-            {mode === 'wager'
-              ? 'The arbitrator decides the winner. Loser\'s funds go to the winner minus fees.'
-              : 'You can verify all transactions on arbiscan'}
-          </p>
-        </div>
+          {/* Footer */}
+          <div className="rune-cform-footer rune-frow-full">
+            <button
+              type="button"
+              onClick={resetForm}
+              className="rune-cform-back"
+              title="Clear form"
+              aria-label="Clear form"
+            >
+              <ArrowLeft size={18} />
+            </button>
+            {!wallet.address ? (
+              <button type="button" onClick={() => wallet.connect()} className="rune-cform-submit">
+                <Wallet className="w-4 h-4" />
+                Connect Wallet to Create
+              </button>
+            ) : wallet.chainId !== chainId ? (
+              <button type="button" onClick={() => wallet.switchChain()} className="rune-cform-submit">
+                Switch to {chainConfig.shortName}
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!isFormValid || isLoading}
+                className="rune-cform-submit"
+              >
+                {isLoading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    {createStep === 'signing' && 'Sign in wallet...'}
+                    {createStep === 'confirming' && 'Confirming on chain...'}
+                    {createStep === 'registering' && 'Registering escrow...'}
+                  </span>
+                ) : (
+                  'Create Escrow'
+                )}
+              </button>
+            )}
+          </div>
+        </form>
       </div>
     </motion.div>
   );

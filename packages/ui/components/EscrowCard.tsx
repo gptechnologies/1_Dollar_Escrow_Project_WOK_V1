@@ -1,49 +1,69 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import {
-  Copy,
+  AlertCircle,
   Check,
+  CheckCircle,
+  CircleDollarSign,
+  Clock3,
   ExternalLink,
-  Calendar,
-  Coins,
-  User,
-  Tag,
-  ArrowRight,
-  CheckCircle2,
-  Shield,
-  ClipboardPaste,
-  Fingerprint,
-  X,
+  Lock,
+  Loader2,
+  RotateCcw,
+  Send,
+  ShieldCheck,
+  Wallet,
 } from 'lucide-react';
-import { getArbiscanAddressUrl } from '@/lib/chain';
-import { buildShareUrl, buildWalletShareUrls } from '@/lib/share';
-import { SIMPLE_COPY } from '@/lib/copy';
-import { getStageGuidance, normalizePhaseName, StagePill, StageProgress, type PhaseKey } from './escrowStage';
-import ShareModal from './ShareModal';
+import type { LucideIcon } from 'lucide-react';
+import type { Address, Hex } from 'viem';
+import { getArbiscanAddressUrl, getArbiscanTxUrl, getChainConfig, type SupportedChainId } from '@/lib/chain';
+import { EscrowOutcome, type EscrowActivity, type EscrowState } from '@/lib/chain';
+import { ACTION_META, buildActionTx, checkEligibility, getDashboardActions, resolveDashboardAction, type DashboardAction } from '@/lib/escrowActions';
+import { buildDashboardActionHref, isShareAction, type ShareAction } from '@/lib/share';
+import { buildMetaMaskDeepLink, useWalletConnection } from '@/lib/wallet';
+import FieldHelpPopover from './FieldHelpPopover';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export type EscrowCardProps = {
+  chainId: SupportedChainId;
+  chainName?: string;
   escrow: string;
-  code: string;
-  phase: number;
-  phaseName: string;
-  deadline: number | null;
-  confirmDeadline?: number;
-  targetAmount: string | null;
+  code?: string;
+  status: number;
+  statusName?: string;
+  sellerWallet: string;
+  buyerRefundWallet: string;
   token?: string;
-  payout: string;
-  funder: string;
+  tokenSymbol?: string;
+  tokenDecimals?: number;
+  targetAmount: string | null;
+  balance?: string;
+  createdAt?: number | null;
+  settlementDate?: number | null;
   arbitrator1?: string;
   arbitrator2?: string;
-  arbitrator3?: string;  // Deadlock arbitrator (3-arb setup only)
-  arbitratorCount?: number;  // 0, 1, or 3 (never 2)
-  deadlocked?: boolean;  // True if arb1 and arb2 voted differently
+  arbitrator3?: string;
+  arbitrationMode?: number; // 0, 1, or 3
+  pendingOutcome?: number; // 0 None, 1 Settle, 2 Refund
+  settleVotes?: number;
+  refundVotes?: number;
+  mutualSettleApprovedByBuyer?: boolean;
+  mutualSettleApprovedBySeller?: boolean;
+  mutualRefundApprovedByBuyer?: boolean;
+  mutualRefundApprovedBySeller?: boolean;
+  isFunded?: boolean;
+  isActivatable?: boolean;
+  isSettleable?: boolean;
+  isVotable?: boolean;
+  isFinalizable?: boolean;
+  isRefundableUnderfunded?: boolean;
+  isTerminal?: boolean;
   isPartial?: boolean;
+  activity?: EscrowActivity[];
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -53,11 +73,28 @@ export type EscrowCardProps = {
 const MICRO_UNITS = BigInt(1_000_000);
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
-// Known token addresses on Arbitrum
 const TOKEN_SYMBOLS: Record<string, string> = {
   '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 'USDC',
   '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': 'USDT',
+  '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'USDC',
+  '0xdac17f958d2ee523a2206206994597c13d831ec7': 'USDT',
 };
+
+const INTENT_ICONS: Record<DashboardAction['intent'], LucideIcon> = {
+  fund: CircleDollarSign,
+  confirm: ShieldCheck,
+  release: Send,
+  refund: RotateCcw,
+};
+
+const DASHBOARD_HELP = {
+  escrowProgress:
+    'This shows where the escrow is in the process. Created means it exists. Funded means the buyer has sent the payment. Confirmed means the seller has acknowledged it. Resolved means the money has been released or refunded.',
+  actions:
+    'Use these buttons to take the next allowed step. The right person, such as the buyer, seller, or arbitrator, can confirm, release, or refund when that action is available.',
+  recentActions:
+    'This is the activity history for the escrow. It shows actions requested or completed by any party, such as a seller confirming or an arbitrator voting to release or refund.',
+} as const;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Utility Functions
@@ -65,278 +102,355 @@ const TOKEN_SYMBOLS: Record<string, string> = {
 
 const formatAmount = (value: string | null): string => {
   if (!value) return '—';
-
   try {
     const amount = BigInt(value);
     const whole = amount / MICRO_UNITS;
     const fraction = amount % MICRO_UNITS;
-
-    if (fraction === BigInt(0)) {
-      return whole.toString();
-    }
-
-    const fractionStr = fraction
-      .toString()
-      .padStart(6, '0')
-      .replace(/0+$/, '');
-
-    return `${whole.toString()}.${fractionStr}`;
+    const wholeStr = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    if (fraction === BigInt(0)) return `${wholeStr}.00`;
+    const fractionStr = fraction.toString().padStart(6, '0').replace(/0+$/, '').slice(0, 2).padEnd(2, '0');
+    return `${wholeStr}.${fractionStr}`;
   } catch {
     return value;
   }
 };
 
-const formatDeadline = (value: number | null): string => {
+const formatDeadline = (value: number | null | undefined): string => {
   if (!value) return '—';
   const date = new Date(value * 1000);
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleString(undefined, {
-    weekday: 'short',
     month: 'short',
     day: 'numeric',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   });
 };
 
-const getTokenSymbol = (tokenAddress: string): string => {
-  return TOKEN_SYMBOLS[tokenAddress.toLowerCase()] || 'TOKEN';
+const formatActivityTime = (value: number | null | undefined): string => {
+  if (!value) return '--:--';
+  const date = new Date(value * 1000);
+  if (Number.isNaN(date.getTime())) return '--:--';
+  return date.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 };
 
-const shortenAddress = (address: string): string => {
-  if (!address || address.length < 10) return address;
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+const getTokenSymbol = (tokenAddress: string): string =>
+  TOKEN_SYMBOLS[tokenAddress.toLowerCase()] || 'USDC';
+
+const isAssignedAddress = (value?: string): value is string =>
+  !!value && value !== ZERO_ADDRESS;
+
+const asAddress = (value?: string): Address =>
+  (value && isAssignedAddress(value) ? value : ZERO_ADDRESS) as Address;
+
+const asBigInt = (value?: string | null): bigint => {
+  if (!value) return BigInt(0);
+  try {
+    return BigInt(value);
+  } catch {
+    return BigInt(0);
+  }
 };
+
+function buildDashboardEscrowState(props: EscrowCardProps): EscrowState {
+  const balance = asBigInt(props.balance);
+  return {
+    chainId: props.chainId,
+    escrow: props.escrow as Address,
+    sellerWallet: props.sellerWallet as Address,
+    buyerRefundWallet: props.buyerRefundWallet as Address,
+    token: asAddress(props.token),
+    treasury: ZERO_ADDRESS as Address,
+    arbitrator1: asAddress(props.arbitrator1),
+    arbitrator2: asAddress(props.arbitrator2),
+    arbitrator3: asAddress(props.arbitrator3),
+    arbitrationMode: props.arbitrationMode ?? 0,
+    targetAmount: asBigInt(props.targetAmount),
+    balance,
+    settlementDate: props.settlementDate ?? 0,
+    createdAt: props.createdAt ?? 0,
+    overrideWindowEnd: 0,
+    termsHash: '0x',
+    status: props.status,
+    pendingOutcome: (props.pendingOutcome ?? EscrowOutcome.NONE) as EscrowOutcome,
+    settleVotes: props.settleVotes ?? 0,
+    refundVotes: props.refundVotes ?? 0,
+    isFunded: !!props.isFunded,
+    mutualSettleApprovedByBuyer: !!props.mutualSettleApprovedByBuyer,
+    mutualSettleApprovedBySeller: !!props.mutualSettleApprovedBySeller,
+    mutualRefundApprovedByBuyer: !!props.mutualRefundApprovedByBuyer,
+    mutualRefundApprovedBySeller: !!props.mutualRefundApprovedBySeller,
+    isTerminal: !!props.isTerminal,
+    isActivatable: !!props.isActivatable,
+    isRefundableUnderfunded: !!props.isRefundableUnderfunded,
+    isSettleable: !!props.isSettleable,
+    isVotable: !!props.isVotable,
+    isInOverrideWindow: false,
+    isFinalizable: !!props.isFinalizable,
+    tokenSymbol: props.tokenSymbol ?? (props.token ? getTokenSymbol(props.token) : 'USDC'),
+    tokenDecimals: props.tokenDecimals ?? 6,
+    escrowTokenBalance: balance,
+  };
+}
+
+function currentActionUrl(action: ShareAction, escrow: string, code?: string, role?: DashboardAction['role']): string {
+  const href = buildDashboardActionHref(action, escrow, code ?? '', role);
+  if (typeof window === 'undefined') return href;
+  return `${window.location.origin}${href}`;
+}
+
+function roleForAction(action: ShareAction): DashboardAction['role'] | undefined {
+  if (action === 'fund') return 'buyer';
+  if (action === 'sellerConfirm') return 'seller';
+  if (action === 'arbSettle' || action === 'arbRefund') return 'arbitrator';
+  return undefined;
+}
+
+function tileMatchesAction(tile: DashboardAction, action: ShareAction): boolean {
+  if (tile.action === action) return true;
+  if (tile.intent === 'release') {
+    return action === 'settle' || action === 'mutualSettle' || action === 'arbSettle' || action === 'finalize';
+  }
+  if (tile.intent === 'refund') {
+    return action === 'refundUnderfunded' || action === 'mutualRefund' || action === 'arbRefund' || action === 'finalize';
+  }
+  return false;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Sub-Components
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type CopyButtonProps = {
+function DashAddressRow({
+  label,
+  value,
+  copyLabel,
+  emptyText = 'Not assigned',
+}: {
+  label: string;
+  value?: string;
+  copyLabel: string;
+  emptyText?: string;
+}) {
+  const assigned = isAssignedAddress(value);
+  return (
+    <span className="rune-dash-address-row rune-surface-inset">
+      <b>{label}</b>
+      {assigned ? (
+        <CopyableField value={value} label={copyLabel} />
+      ) : (
+        <span className="rune-dash-address-empty">{emptyText}</span>
+      )}
+    </span>
+  );
+}
+
+function CopyableField({
+  value,
+  label,
+}: {
   value: string;
-};
-
-function CopyButton({ value }: CopyButtonProps) {
+  label: string;
+}) {
   const [copied, setCopied] = useState(false);
-
-  const handleCopy = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleCopy = async () => {
     await navigator.clipboard.writeText(value);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
   return (
     <button
+      type="button"
+      className={`rune-dash-copyable${copied ? ' is-copied' : ''}`}
       onClick={handleCopy}
-      className="p-1.5 rounded hover:bg-white/10 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
-      title="Copy to clipboard"
+      title={copied ? 'Copied' : value}
+      aria-label={label}
     >
-      {copied ? (
-        <Check className="w-3.5 h-3.5 text-[#0BB89A]" />
-      ) : (
-        <Copy className="w-3.5 h-3.5 text-white/50 hover:text-white/80" />
-      )}
+      <code>{copied ? 'Copied' : value}</code>
+      <span className="sr-only" aria-live="polite">{copied ? 'Copied to clipboard' : ''}</span>
     </button>
   );
 }
 
-type DetailRowProps = {
-  label: string;
-  value: string;
-  icon?: React.ReactNode;
-  mono?: boolean;
-  showCopy?: boolean;
-  showLink?: boolean;
-  fullWidth?: boolean;
-};
+function ActionTile({
+  tile,
+  onSelect,
+}: {
+  tile: DashboardAction;
+  onSelect: (tile: DashboardAction) => void;
+}) {
+  const Icon = tile.enabled ? INTENT_ICONS[tile.intent] : Lock;
 
-function DetailRow({
-  label,
-  value,
-  icon,
-  mono,
-  showCopy,
-  showLink,
-  fullWidth,
-}: DetailRowProps) {
+  if (!tile.enabled) {
+    return (
+      <span
+        className="rune-dash-action-tile is-disabled"
+        role="link"
+        aria-disabled="true"
+        title={tile.reason}
+      >
+        <span className="rune-dash-action-icon" aria-hidden><Icon size={22} /></span>
+        <span className="rune-dash-action-label">{tile.label}</span>
+        <span className="sr-only">{tile.reason}</span>
+      </span>
+    );
+  }
+
   return (
-    <div className={`${fullWidth ? '' : ''}`}>
-      <div className="flex items-center gap-1.5 text-[11px] text-white/50 mb-1">
-        {icon}
-        {label}
-      </div>
-      <div className="flex items-center gap-1">
-        <span
-          className={`text-sm text-white/90 ${mono ? 'font-mono text-xs' : ''} ${
-            fullWidth ? 'break-all' : ''
-          }`}
-          title={value}
-        >
-          {value}
-        </span>
-        {showCopy && <CopyButton value={value} />}
-        {showLink && (
-          <a
-            href={getArbiscanAddressUrl(value)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-1.5 rounded hover:bg-white/10 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
-            title="View on Arbiscan"
-          >
-            <ExternalLink className="w-3.5 h-3.5 text-white/50 hover:text-white/80" />
-          </a>
-        )}
-      </div>
-    </div>
+    <button
+      type="button"
+      onClick={() => onSelect(tile)}
+      className="rune-dash-action-tile"
+      title={tile.label}
+    >
+      <span className="rune-dash-action-icon" aria-hidden><Icon size={22} /></span>
+      <span className="rune-dash-action-label">{tile.label}</span>
+    </button>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Wallet Matcher
-// ═══════════════════════════════════════════════════════════════════════════════
+function DashboardHeading({
+  as = 'h4',
+  label,
+  help,
+}: {
+  as?: 'h3' | 'h4';
+  label: string;
+  help: string;
+}) {
+  const content = (
+    <>
+      <span>{label}</span>
+      <FieldHelpPopover label={label} description={help} />
+    </>
+  );
 
-type MatchResult = { role: string; address: string } | null;
-
-function useWalletMatcher(addresses: { role: string; address: string }[]) {
-  const [input, setInput] = useState('');
-
-  const match: MatchResult = (() => {
-    const trimmed = input.trim().toLowerCase();
-    if (!trimmed || !/^0x[a-fA-F0-9]{40}$/.test(input.trim())) return null;
-    for (const entry of addresses) {
-      if (entry.address.toLowerCase() === trimmed) return entry;
-    }
-    return null;
-  })();
-
-  const hasInput = input.trim().length > 0;
-  const noMatch = hasInput && /^0x[a-fA-F0-9]{40}$/.test(input.trim()) && !match;
-
-  return { input, setInput, match, hasInput, noMatch };
+  return as === 'h3' ? (
+    <h3 className="rune-dash-heading">{content}</h3>
+  ) : (
+    <h4 className="rune-dash-heading">{content}</h4>
+  );
 }
 
-type WalletMatchBarProps = {
-  input: string;
-  setInput: (v: string) => void;
-  match: MatchResult;
-  noMatch: boolean;
-};
+function InlineActionPanel({
+  tile,
+  escrowState,
+  code,
+  onClose,
+}: {
+  tile: DashboardAction;
+  escrowState: EscrowState;
+  code?: string;
+  onClose: () => void;
+}) {
+  const chainConfig = getChainConfig(escrowState.chainId);
+  const wallet = useWalletConnection(escrowState.chainId);
+  const resolvedAction = resolveDashboardAction(escrowState, tile, wallet.address);
+  const meta = ACTION_META[resolvedAction];
+  const eligibility = checkEligibility(escrowState, resolvedAction, wallet.address);
+  const tx = buildActionTx(resolvedAction, escrowState);
+  const isOnTargetChain = wallet.chainId === escrowState.chainId;
+  const canSend = wallet.step === 'ready' && isOnTargetChain && eligibility.eligible;
+  const actionUrl = currentActionUrl(resolvedAction, escrowState.escrow, code, roleForAction(resolvedAction));
+  const metaMaskUrl = buildMetaMaskDeepLink(actionUrl);
 
-function WalletMatchBar({ input, setInput, match, noMatch }: WalletMatchBarProps) {
-  const handlePaste = useCallback(async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      setInput(text.trim());
-    } catch { /* clipboard unavailable */ }
-  }, [setInput]);
+  const execute = async () => {
+    if (!wallet.address) {
+      await wallet.connect();
+      return;
+    }
+    if (!isOnTargetChain) {
+      await wallet.switchChain();
+      return;
+    }
+    if (eligibility.eligible) {
+      await wallet.sendTransaction(tx.to, tx.data as Hex);
+    }
+  };
+
+  if (!wallet.hasInjectedWallet) {
+    return (
+      <section className="rune-dash-inline-action rune-dash-panel" aria-live="polite">
+        <div className="rune-dash-inline-head">
+          <div>
+            <small>{meta.functionName}</small>
+            <h4>{meta.title}</h4>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close action">Close</button>
+        </div>
+        <p>{meta.description}</p>
+        <a className="rune-dash-inline-primary" href={metaMaskUrl}>
+          <Wallet size={16} />
+          Open in MetaMask
+          <ExternalLink size={14} />
+        </a>
+      </section>
+    );
+  }
 
   return (
-    <div className="mb-3">
-      <div className="flex items-center gap-1.5 text-[11px] text-white/50 mb-1.5">
-        <Fingerprint className="w-3 h-3" />
-        Verify your wallet
+    <section className="rune-dash-inline-action rune-dash-panel" aria-live="polite">
+      <div className="rune-dash-inline-head">
+        <div>
+          <small>{meta.functionName}</small>
+          <h4>{meta.title}</h4>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close action">Close</button>
       </div>
-      <div className="relative flex items-center">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Paste your address to verify role"
-          className={`w-full pl-3 pr-20 py-2 rounded-lg font-mono text-xs transition-all surface-input focus:outline-none focus:ring-2 text-white placeholder:text-white/35 ${
-            match
-              ? 'border-[#0BB89A]/60 focus:ring-[#0BB89A]/40 bg-[#0BB89A]/10'
-              : noMatch
-                ? 'border-red-400/50 focus:ring-red-400/30 bg-red-500/5'
-                : 'focus:ring-[#0BB89A]/30'
-          }`}
-        />
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-          {input && (
-            <button
-              type="button"
-              onClick={() => setInput('')}
-              className="p-1 text-white/40 hover:text-white/70 transition-colors"
-              title="Clear"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
+
+      <p>{meta.description}</p>
+
+      {wallet.address && (
+        <div className="rune-dash-inline-wallet rune-surface-inset">
+          <span>Wallet</span>
+          <code>{wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}</code>
+          <b>{isOnTargetChain ? chainConfig.shortName : 'Wrong network'}</b>
+        </div>
+      )}
+
+      {wallet.step === 'success' && wallet.txHash ? (
+        <div className="rune-dash-inline-result success">
+          <CheckCircle size={17} />
+          <span>Transaction submitted</span>
+          <a href={getArbiscanTxUrl(wallet.txHash, escrowState.chainId)} target="_blank" rel="noopener noreferrer">
+            View <ExternalLink size={12} />
+          </a>
+        </div>
+      ) : wallet.step === 'error' ? (
+        <div className="rune-dash-inline-result error">
+          <AlertCircle size={17} />
+          <span>{wallet.error}</span>
+          <button type="button" onClick={wallet.reset}>Reset</button>
+        </div>
+      ) : (
+        <>
+          <ul className="rune-dash-inline-checks">
+            {eligibility.reasons.map((reason) => (
+              <li key={reason} className={eligibility.eligible ? 'ok' : ''}>{reason}</li>
+            ))}
+          </ul>
           <button
             type="button"
-            onClick={handlePaste}
-            className="p-1 text-white/40 hover:text-white/70 transition-colors"
-            title="Paste from clipboard"
+            className="rune-dash-inline-primary"
+            onClick={execute}
+            disabled={wallet.step === 'connecting' || wallet.step === 'switching' || wallet.step === 'signing' || (!!wallet.address && isOnTargetChain && !eligibility.eligible)}
           >
-            <ClipboardPaste className="w-3.5 h-3.5" />
+            {wallet.step === 'connecting' || wallet.step === 'switching' || wallet.step === 'signing' ? <Loader2 size={16} className="animate-spin" /> : <Wallet size={16} />}
+            {!wallet.address
+              ? 'Connect MetaMask'
+              : !isOnTargetChain
+                ? `Switch to ${chainConfig.shortName}`
+                : canSend
+                  ? meta.title
+                  : 'Action unavailable'}
           </button>
-        </div>
-      </div>
-
-      {/* Match result */}
-      {match && (
-        <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-[#0BB89A]/15 border border-[#0BB89A]/30">
-          <CheckCircle2 className="w-3.5 h-3.5 text-[#0BB89A] shrink-0" />
-          <span className="text-xs text-[#0BB89A] font-medium">
-            Match — You are the <span className="font-bold">{match.role}</span>
-          </span>
-        </div>
+        </>
       )}
-      {noMatch && (
-        <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/25">
-          <X className="w-3.5 h-3.5 text-red-400 shrink-0" />
-          <span className="text-xs text-red-300">
-            No match — This address is not a party in this escrow
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Party Row (with match highlight)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-type PartyRowProps = {
-  role: string;
-  address: string;
-  isMatch: boolean;
-};
-
-function PartyRow({ role, address, isMatch }: PartyRowProps) {
-  return (
-    <div
-      className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 rounded-lg px-2.5 py-2 -mx-2.5 transition-colors ${
-        isMatch ? 'bg-[#0BB89A]/10 ring-1 ring-[#0BB89A]/30' : ''
-      }`}
-    >
-      <div className={`flex items-center gap-1.5 text-[11px] w-16 shrink-0 ${
-        isMatch ? 'text-[#0BB89A]' : 'text-white/50'
-      }`}>
-        <User className="w-3 h-3" />
-        {role}
-        {isMatch && <Check className="w-3 h-3 text-[#0BB89A]" />}
-      </div>
-      <div className="flex items-center gap-1 min-w-0">
-        <code className={`font-mono text-xs break-all sm:truncate ${
-          isMatch ? 'text-[#0BB89A]' : 'text-white/80'
-        }`}>
-          <span className="sm:hidden">{shortenAddress(address)}</span>
-          <span className="hidden sm:inline">{address}</span>
-        </code>
-        <CopyButton value={address} />
-        <a
-          href={getArbiscanAddressUrl(address)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="p-1.5 rounded hover:bg-white/10 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center shrink-0"
-          title="View on Arbiscan"
-        >
-          <ExternalLink className="w-3.5 h-3.5 text-white/50 hover:text-white/80" />
-        </a>
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -344,337 +458,207 @@ function PartyRow({ role, address, isMatch }: PartyRowProps) {
 // Main Component
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export default function EscrowCard({
-  escrow,
-  code,
-  phase,
-  phaseName,
-  deadline,
-  targetAmount,
-  token,
-  payout,
-  funder,
-  arbitrator1,
-  arbitrator2,
-  arbitrator3,
-  arbitratorCount,
-  deadlocked,
-  isPartial,
-}: EscrowCardProps) {
-  const phaseLabel = phaseName || `Phase ${phase}`;
-  const phaseKey = normalizePhaseName(phaseLabel);
-  const tokenSymbol = token ? getTokenSymbol(token) : 'USDC';
+export default function EscrowCard(props: EscrowCardProps) {
+  const [selectedAction, setSelectedAction] = useState<DashboardAction | null>(null);
+  const [hydratedUrlAction, setHydratedUrlAction] = useState(false);
+  const {
+    escrow,
+    code,
+    status,
+    sellerWallet,
+    buyerRefundWallet,
+    token,
+    tokenSymbol,
+    targetAmount,
+    balance,
+    createdAt,
+    settlementDate,
+    arbitrator1,
+    arbitrator2,
+    arbitrator3,
+    arbitrationMode,
+    isFunded,
+    isPartial,
+    activity,
+  } = props;
 
-  const hasArbitrators = (arbitratorCount ?? 0) > 0;
-  const arb1Valid = arbitrator1 && arbitrator1 !== ZERO_ADDRESS;
-  const arb2Valid = arbitrator2 && arbitrator2 !== ZERO_ADDRESS;
-  const arb3Valid = arbitrator3 && arbitrator3 !== ZERO_ADDRESS;
+  const displayTokenSymbol = tokenSymbol || (token ? getTokenSymbol(token) : 'USDC');
 
-  // Build the matchable addresses list
-  const matchAddresses = [
-    { role: 'Buyer', address: funder },
-    { role: 'Seller', address: payout },
-    ...(arb1Valid ? [{ role: 'Arbitrator #1', address: arbitrator1 }] : []),
-    ...(arb2Valid ? [{ role: 'Arbitrator #2', address: arbitrator2 }] : []),
-    ...(arb3Valid ? [{ role: 'Arbitrator #3', address: arbitrator3 }] : []),
+  const settled = status === 3;
+  const refunded = status === 4;
+  const resolved = settled || refunded;
+  const funded = !!isFunded;
+
+  const arb1Valid = isAssignedAddress(arbitrator1);
+  const arbCount = arbitrationMode ?? (arb1Valid ? 1 : 0);
+
+  const addressRows = [
+    { label: 'Escrow', value: escrow, copyLabel: 'Copy escrow address' },
+    { label: 'Buyer', value: buyerRefundWallet, copyLabel: 'Copy buyer address' },
+    { label: 'Seller', value: sellerWallet, copyLabel: 'Copy seller address' },
+    { label: 'Arbitrator 1', value: arbitrator1, copyLabel: 'Copy arbitrator 1 address' },
+    { label: 'Arbitrator 2', value: arbitrator2, copyLabel: 'Copy arbitrator 2 address' },
+    { label: 'Arbitrator 3', value: arbitrator3, copyLabel: 'Copy arbitrator 3 address' },
+  ] as const;
+
+  // ── Progress: Created -> Funded -> Confirmed (optional) -> Resolved.
+  // Seller confirmation is optional, so a funded escrow can resolve without it.
+  type StepState = 'done' | 'active' | '';
+  const confirmed = status === 1 || status === 2;
+  const steps: { name: string; state: StepState }[] = [
+    { name: 'Created', state: 'done' },
+    { name: 'Funded', state: funded || confirmed || resolved ? 'done' : 'active' },
+    { name: 'Confirmed', state: confirmed || resolved ? 'done' : funded ? 'active' : '' },
+    { name: 'Resolved', state: resolved ? 'done' : status === 2 ? 'active' : '' },
   ];
 
-  const matcher = useWalletMatcher(matchAddresses);
-  const inputLower = matcher.input.trim().toLowerCase();
-  const confirmShareUrl = buildShareUrl(code, { action: 'confirm', role: 'seller' });
-  const confirmWalletUrls = buildWalletShareUrls(code, { action: 'confirm', role: 'seller' });
-  const fundShareUrl = buildShareUrl(code, { action: 'fund', role: 'buyer' });
-  const fundWalletUrls = buildWalletShareUrls(code, { action: 'fund', role: 'buyer' });
-  const finalizeShareUrl = buildShareUrl(code, { action: 'finalize' });
-  const finalizeWalletUrls = buildWalletShareUrls(code, { action: 'finalize' });
-  const stageGuidance = getStageGuidance(phaseKey, {
-    buyerAddress: funder,
-    sellerAddress: payout,
+  const actionTiles = getDashboardActions({
+    status,
+    arbitrationMode: arbCount,
+    pendingOutcome: props.pendingOutcome,
+    balance,
+    isFunded: props.isFunded,
+    isTerminal: props.isTerminal,
+    isActivatable: props.isActivatable,
+    isSettleable: props.isSettleable,
+    isVotable: props.isVotable,
+    isFinalizable: props.isFinalizable,
+    isRefundableUnderfunded: props.isRefundableUnderfunded,
   });
 
+  const escrowState = buildDashboardEscrowState(props);
+
+  useEffect(() => {
+    if (hydratedUrlAction || selectedAction || typeof window === 'undefined') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const actionParam = params.get('action') ?? undefined;
+    const escrowParam = params.get('escrow');
+    if (!isShareAction(actionParam)) return;
+    if (escrowParam && escrowParam.toLowerCase() !== escrow.toLowerCase()) return;
+
+    const matchingTile = actionTiles.find((tile) => tile.enabled && tileMatchesAction(tile, actionParam));
+    if (matchingTile) {
+      setSelectedAction(matchingTile);
+      setHydratedUrlAction(true);
+    }
+  }, [actionTiles, escrow, hydratedUrlAction, selectedAction]);
+
+  const recentActions = activity && activity.length > 0
+    ? activity
+    : [{
+        id: 'created-fallback',
+        timestamp: createdAt ?? null,
+        role: 'Contract',
+        tone: 'contract',
+        text: 'Executed Function: Created',
+      } satisfies EscrowActivity];
+
   return (
-    <div className="surface-card overflow-hidden">
-      {/* Header: Lookup Code + Phase */}
-      <div className="px-4 py-3 border-b border-white/10">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="text-[11px] text-white/50 mb-1">Lookup Code</div>
-            <div className="flex items-center gap-1 flex-wrap">
-              <code className="font-mono text-sm text-white/90">
-                {code}
-              </code>
-              <CopyButton value={code} />
-            </div>
-            <div className="flex items-center gap-1 mt-1.5">
-              <code className="font-mono text-[11px] text-white/50 break-all">
-                {shortenAddress(escrow)}
-              </code>
-              <a
-                href={getArbiscanAddressUrl(escrow)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center shrink-0"
-                title="View on Arbiscan"
-              >
-                <ExternalLink className="w-3 h-3 text-white/40 hover:text-white/70" />
-              </a>
-            </div>
-          </div>
-          <StagePill phase={phaseKey} />
-        </div>
-        <StageProgress phase={phaseKey} />
-        <div className="mt-3 rounded-lg bg-white/10 border border-white/15 p-3">
-          <p className="text-sm text-white/90 font-medium">{stageGuidance.headline}</p>
-          <p className="text-xs text-white/70 mt-1">
-            <span className="text-white/90 font-semibold">{SIMPLE_COPY.nextPrefix}</span> {stageGuidance.instruction}
-          </p>
-          <p className="text-xs text-white/55 mt-1">{stageGuidance.afterAction}</p>
-        </div>
-      </div>
-
-      {/* Primary Details */}
-      <div className="px-4 py-3 border-b border-white/10">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-          <DetailRow
-            label="Lookup Code"
-            value={code}
-            icon={<Tag className="w-3 h-3" />}
-            mono
-            showCopy
-          />
-          <DetailRow
-            label="Deadline"
-            value={formatDeadline(deadline)}
-            icon={<Calendar className="w-3 h-3" />}
-          />
-          <DetailRow
-            label="Amount"
-            value={`${formatAmount(targetAmount)} ${tokenSymbol}`}
-            icon={<Coins className="w-3 h-3" />}
-          />
-        </div>
-      </div>
-
-      {/* Parties Section */}
-      <div className="px-4 py-3 border-b border-white/10">
-        <div className="text-[11px] text-white/40 uppercase tracking-wide mb-3">
-          Parties
-        </div>
-
-        {/* Wallet matcher input */}
-        <WalletMatchBar
-          input={matcher.input}
-          setInput={matcher.setInput}
-          match={matcher.match}
-          noMatch={matcher.noMatch}
-        />
-
-        <div className="space-y-1">
-          <PartyRow role="Buyer" address={funder} isMatch={funder.toLowerCase() === inputLower} />
-          <PartyRow role="Seller" address={payout} isMatch={payout.toLowerCase() === inputLower} />
-        </div>
-      </div>
-
-      {/* Arbitrators Section (if any) */}
-      {hasArbitrators && (
-        <div className="px-4 py-3 border-b border-white/10 bg-white/[0.02]">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-1.5 text-[11px] text-white/40 uppercase tracking-wide">
-              <Shield className="w-3 h-3" />
-              Arbitrators ({arbitratorCount})
-            </div>
-            {deadlocked && (
-              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-300">
-                Deadlocked
+    <div className="rune-dash">
+      {/* Header */}
+      <div className="rune-dash-header">
+        <div className="rune-dash-head-main">
+          <div className="rune-dash-head-body">
+            <div className="rune-dash-amount">
+              <small className="rune-dash-amount-label">Escrow Amount</small>
+              <strong>{formatAmount(targetAmount)}</strong>
+              <span className="rune-dash-token-chip">
+                <CircleDollarSign size={14} />
+                {displayTokenSymbol}
               </span>
+            </div>
+            {balance && (
+              <div className="rune-dash-balance">
+                Balance <strong>{formatAmount(balance)}</strong> {displayTokenSymbol}
+              </div>
             )}
+            <div className="rune-dash-deadlines">
+              <div className="rune-dash-deadline-item">
+                <Clock3 size={14} aria-hidden />
+                <div>
+                  <small>Settlement Date</small>
+                  <time>{formatDeadline(settlementDate)}</time>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="space-y-1">
-            {arb1Valid && (
-              <ArbRow num={1} address={arbitrator1} isMatch={arbitrator1.toLowerCase() === inputLower} />
-            )}
-            {arb2Valid && (
-              <ArbRow num={2} address={arbitrator2} isMatch={arbitrator2.toLowerCase() === inputLower} />
-            )}
-            {arb3Valid && (
-              <ArbRow num={3} address={arbitrator3} isMatch={arbitrator3.toLowerCase() === inputLower} suffix="(tiebreaker)" />
-            )}
+        </div>
+        <div className="rune-dash-head-side">
+          <div className="rune-dash-addresses">
+            {addressRows.map((row) => (
+              <DashAddressRow
+                key={row.label}
+                label={row.label}
+                value={row.value}
+                copyLabel={row.copyLabel}
+              />
+            ))}
           </div>
-          {arbitratorCount === 3 && (
-            <p className="mt-2 text-[10px] text-white/50">
-              Arb #1 and #2 must agree. If they disagree, #3 breaks the tie.
-              Unresolved disputes are swept to treasury.
-            </p>
-          )}
         </div>
-      )}
+      </div>
 
-      {/* Partial Data Notice */}
-      {isPartial && (
-        <div className="px-4 py-2 border-b border-white/10 bg-yellow-500/5">
-          <p className="text-[11px] text-yellow-300/70">
-            Limited data available (older contract version)
-          </p>
+      {/* Progress */}
+      <section className="rune-dash-progress">
+        <DashboardHeading label="Escrow Progress" help={DASHBOARD_HELP.escrowProgress} />
+        <div className="rune-dash-steps">
+          {steps.map((step) => (
+            <div className={`rune-dash-step ${step.state}`} key={step.name}>
+              <b>{step.state === 'done' ? <Check size={13} /> : <i />}</b>
+              <span>{step.name}</span>
+            </div>
+          ))}
         </div>
-      )}
+      </section>
 
-      {/* Action Footer */}
-      <div className="px-4 py-3">
-        <PhaseActionButton
-          phaseKey={phaseKey}
-          escrowAddress={escrow}
+      {/* Actions + recent on-chain actions */}
+      <div className="rune-dash-grid">
+        <section className="rune-dash-panel rune-dash-actions-panel">
+          <DashboardHeading label="Actions" help={DASHBOARD_HELP.actions} />
+          <div className="rune-dash-action-grid">
+            {actionTiles.map((tile) => (
+              <ActionTile key={tile.intent} tile={tile} onSelect={setSelectedAction} />
+            ))}
+          </div>
+        </section>
+
+        <section className="rune-dash-panel rune-dash-log">
+          <DashboardHeading label="Recent Actions" help={DASHBOARD_HELP.recentActions} />
+          <div className="rune-dash-log-list">
+            {recentActions.map((row) => (
+              <div className="rune-dash-log-row" key={row.id}>
+                <span className="rune-dash-log-time">[{formatActivityTime(row.timestamp)}]</span>
+                <span className={`rune-dash-log-role ${row.tone}`}>{row.role}:</span>
+                <span className="rune-dash-log-text">{row.text}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {selectedAction && (
+        <InlineActionPanel
+          tile={selectedAction}
+          escrowState={escrowState}
           code={code}
-          confirmShareUrl={confirmShareUrl}
-          confirmWalletUrls={confirmWalletUrls}
-          fundShareUrl={fundShareUrl}
-          fundWalletUrls={fundWalletUrls}
-          finalizeShareUrl={finalizeShareUrl}
-          finalizeWalletUrls={finalizeWalletUrls}
+          onClose={() => setSelectedAction(null)}
         />
+      )}
+
+      {isPartial && (
+        <p className="rune-dash-partial">
+          Current contract state is live. Recent action history may be limited by the RPC log range.
+        </p>
+      )}
+
+      <div className="rune-dash-footer">
+        <a href={getArbiscanAddressUrl(escrow, props.chainId)} target="_blank" rel="noopener noreferrer">
+          View on {props.chainId === 1 ? 'Etherscan' : 'Arbiscan'} <ExternalLink size={13} />
+        </a>
+        <span>{props.chainName ?? getChainConfig(props.chainId).name}</span>
+        <span>{refunded ? 'Refunded to buyer' : settled ? 'Settled to seller' : funded ? 'Funded on-chain' : 'Awaiting funding'}</span>
+        {arbCount > 0 && <span className="rune-dash-arbnote">{arbCount === 3 ? '3 arbitrators (2 of 3)' : '1 arbitrator'}</span>}
       </div>
     </div>
   );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Arbitrator Row (with match highlight)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-type ArbRowProps = {
-  num: number;
-  address: string;
-  isMatch: boolean;
-  suffix?: string;
-};
-
-function ArbRow({ num, address, isMatch, suffix }: ArbRowProps) {
-  return (
-    <div
-      className={`flex items-center gap-1 min-w-0 rounded-lg px-2.5 py-1.5 -mx-2.5 transition-colors ${
-        isMatch ? 'bg-[#0BB89A]/10 ring-1 ring-[#0BB89A]/30' : ''
-      }`}
-    >
-      <span className={`text-[11px] w-4 shrink-0 ${isMatch ? 'text-[#0BB89A]' : 'text-white/50'}`}>
-        {num}.
-      </span>
-      <code className={`font-mono text-xs break-all sm:truncate ${isMatch ? 'text-[#0BB89A]' : 'text-white/70'}`}>
-        <span className="sm:hidden">{shortenAddress(address)}</span>
-        <span className="hidden sm:inline">{address}</span>
-      </code>
-      <CopyButton value={address} />
-      {isMatch && <Check className="w-3 h-3 text-[#0BB89A] shrink-0" />}
-      {suffix && <span className="text-[10px] text-white/40 ml-1">{suffix}</span>}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Phase Action Button
-// ═══════════════════════════════════════════════════════════════════════════════
-
-type PhaseActionButtonProps = {
-  phaseKey: PhaseKey;
-  escrowAddress: string;
-  code: string;
-  confirmShareUrl: string;
-  confirmWalletUrls: Record<string, string>;
-  fundShareUrl: string;
-  fundWalletUrls: Record<string, string>;
-  finalizeShareUrl: string;
-  finalizeWalletUrls: Record<string, string>;
-};
-
-function PhaseActionButton({
-  phaseKey,
-  escrowAddress,
-  code,
-  confirmShareUrl,
-  confirmWalletUrls,
-  fundShareUrl,
-  fundWalletUrls,
-  finalizeShareUrl,
-  finalizeWalletUrls,
-}: PhaseActionButtonProps) {
-  switch (phaseKey) {
-    case 'AwaitingConfirmation':
-      return (
-        <div className="space-y-2">
-          <Link
-            href={`/tx/confirm?escrow=${escrowAddress}&code=${encodeURIComponent(code)}&role=seller`}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-yellow-300 bg-yellow-500/10 border border-yellow-500/30 rounded-lg hover:bg-yellow-500/20 active:scale-[0.99] transition-all"
-          >
-            Confirm as Seller
-            <ArrowRight className="w-4 h-4" />
-          </Link>
-          <ShareModal
-            shareUrl={confirmShareUrl}
-            walletUrls={confirmWalletUrls}
-            title="Share confirm link"
-            description="Send this to the seller so they can confirm the escrow."
-            triggerLabel={SIMPLE_COPY.shareConfirm}
-            triggerClassName="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
-          />
-        </div>
-      );
-
-    case 'Funded':
-      return (
-        <div className="space-y-2">
-          <Link
-            href={`/tx/finalize?escrow=${escrowAddress}&code=${encodeURIComponent(code)}`}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/20 active:scale-[0.99] transition-all"
-          >
-            Finalize Escrow
-            <ArrowRight className="w-4 h-4" />
-          </Link>
-          <ShareModal
-            shareUrl={finalizeShareUrl}
-            walletUrls={finalizeWalletUrls}
-            title="Share finalize link"
-            description="Anyone can finalize when conditions are met."
-            triggerLabel={SIMPLE_COPY.shareFinalize}
-            triggerClassName="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
-          />
-        </div>
-      );
-
-    case 'ConfirmedAwaitingFunding':
-      return (
-        <div className="space-y-2">
-          <Link
-            href={`/tx/fund?escrow=${escrowAddress}&code=${encodeURIComponent(code)}&role=buyer`}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-blue-300 bg-blue-500/10 border border-blue-500/30 rounded-lg hover:bg-blue-500/20 active:scale-[0.99] transition-all"
-          >
-            Fund Escrow
-            <ArrowRight className="w-4 h-4" />
-          </Link>
-          <ShareModal
-            shareUrl={fundShareUrl}
-            walletUrls={fundWalletUrls}
-            title="Share funding link"
-            description="Send this to the buyer so they can fund escrow."
-            triggerLabel={SIMPLE_COPY.shareFunding}
-            triggerClassName="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
-          />
-        </div>
-      );
-
-    case 'Resolved':
-      return (
-        <div className="w-full inline-flex items-center justify-center gap-2 py-2 text-sm text-white/50">
-          <CheckCircle2 className="w-4 h-4" />
-          Escrow Complete
-        </div>
-      );
-
-    case 'Expired':
-      return (
-        <div className="w-full text-center py-2 text-sm text-red-300/60">
-          This escrow has expired
-        </div>
-      );
-
-    default:
-      return null;
-  }
 }
