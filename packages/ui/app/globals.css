@@ -5115,3 +5115,90 @@ body {
   background: rgba(40, 108, 207, .16);
   color: #9ccaff;
 }
+
+/* Mobile clarity pass: compact header, single-line activity, centered phase card. */
+.rune-brand.rune-header-chip,
+.rune-header-nav-action,
+.rune-header-actions .rune-docs-action {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.rune-header-nav-action,
+.rune-header-actions .rune-docs-action {
+  min-width: 0 !important;
+  padding-inline: 0 !important;
+}
+
+.rune-dash-log-row {
+  grid-template-columns: auto auto minmax(0, 1fr) !important;
+  align-items: baseline;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.rune-dash-log-time,
+.rune-dash-log-role,
+.rune-dash-log-text {
+  white-space: nowrap;
+}
+
+.rune-dash-log-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 760px) {
+  .rune-site-header {
+    grid-template-columns: 36px minmax(0, 1fr) auto !important;
+    gap: 14px !important;
+    min-height: 60px !important;
+    padding: 8px 0 !important;
+  }
+
+  .rune-brand.rune-header-chip {
+    width: 36px;
+    min-height: 36px !important;
+    padding: 0 !important;
+  }
+
+  .rune-brand.rune-header-chip span {
+    display: none;
+  }
+
+  .rune-brand.rune-header-chip img {
+    width: 36px !important;
+    height: 36px !important;
+  }
+
+  .rune-header-nav-action {
+    justify-self: start;
+    min-height: 40px !important;
+    font-size: 13px !important;
+  }
+
+  .rune-header-actions .rune-docs-action {
+    min-height: 40px !important;
+    font-size: 13px !important;
+  }
+
+  .rune-dash-log-row {
+    grid-template-columns: auto auto minmax(0, 1fr) !important;
+    gap: 5px !important;
+    margin: 0 !important;
+    padding: 8px 0 !important;
+    font-size: 10px !important;
+  }
+
+  .rune-phase-carousel [data-slot="carousel-content"] > div {
+    margin-left: 0 !important;
+  }
+
+  .rune-phase-carousel [data-slot="carousel-item"] {
+    padding-left: 0 !important;
+  }
+}
