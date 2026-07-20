@@ -97,9 +97,9 @@ export default function EscrowLanding() {
 
     <section className="rune-hero rune-escrow-duo" aria-labelledby="rune-heading">
       <div className="rune-title-stack">
-        <h1 id="rune-heading">Non-Custodial P2P Crypto Escrow</h1>
-        <p className="rune-hero-tagline" aria-label="No sign up required">
-          <span>No sign up required</span>
+        <h1 id="rune-heading">Decentralized P2P escrow</h1>
+        <p className="rune-hero-tagline" aria-label="Non Custodial. Trustless. No Wallet Approvals. No Sign Up">
+          <span>Non Custodial. Trustless. No Wallet Approvals. No Sign Up</span>
         </p>
       </div>
 

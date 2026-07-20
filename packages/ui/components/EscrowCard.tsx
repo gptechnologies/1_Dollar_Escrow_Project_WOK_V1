@@ -23,6 +23,7 @@ import { ACTION_META, buildActionTx, checkEligibility, getDashboardActions, reso
 import { buildDashboardActionHref, isShareAction, type ShareAction } from '@/lib/share';
 import { buildMetaMaskDeepLink, useWalletConnection } from '@/lib/wallet';
 import FieldHelpPopover from './FieldHelpPopover';
+import { getStageMeta, stageFromStatus } from './escrowStage';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -530,6 +531,7 @@ export default function EscrowCard(props: EscrowCardProps) {
   });
 
   const escrowState = buildDashboardEscrowState(props);
+  const currentPhase = getStageMeta(stageFromStatus(props.status)).label;
 
   useEffect(() => {
     if (hydratedUrlAction || selectedAction || typeof window === 'undefined') return;
@@ -564,6 +566,11 @@ export default function EscrowCard(props: EscrowCardProps) {
         <div className="rune-dash-head-main">
           <div className="rune-dash-head-body">
             <div className="rune-dash-amount">
+              <div className="rune-dash-phase-row">
+                <span className="rune-dash-chain-tag rune-dash-phase-tag" aria-label={`Current phase: ${currentPhase}`}>
+                  {currentPhase}
+                </span>
+              </div>
               <div className="rune-dash-chain-row">
                 <span className="rune-dash-chain-tag" data-chain-id={props.chainId}>
                   {props.chainName ?? getChainConfig(props.chainId).name}

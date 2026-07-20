@@ -5093,8 +5093,13 @@ body {
   box-shadow: 0 0 0 3px rgba(154, 96, 255, .18), inset 0 1px rgba(255, 255, 255, .1) !important;
 }
 
+.rune-dash-phase-row,
 .rune-dash-chain-row {
   flex: 0 0 100%;
+}
+
+.rune-dash-phase-row {
+  margin-bottom: -4px;
 }
 
 .rune-dash-chain-tag {
@@ -5114,6 +5119,12 @@ body {
   border-color: rgba(121, 184, 255, .32);
   background: rgba(40, 108, 207, .16);
   color: #9ccaff;
+}
+
+.rune-dash-phase-tag {
+  border-color: rgba(187, 145, 255, .34);
+  background: rgba(123, 77, 219, .2);
+  color: #d3b8ff;
 }
 
 /* Mobile clarity pass: compact header, single-line activity, centered phase card. */
