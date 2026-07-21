@@ -103,36 +103,41 @@ export default function EscrowLanding() {
         </p>
       </div>
 
-      <section className="rune-create-panel" id="create" aria-label="Create new escrow">
-        <div className="rune-panel-head">
-          <h2>Create new escrow</h2>
-          <label className="rune-chain-select">
-            <LockKeyhole size={14} aria-hidden />
-            <span className="sr-only">Escrow network</span>
-            <span className="rune-chain-select-value" aria-hidden>
-              {CHAIN_CONFIGS[selectedChainId].name}
-            </span>
-            <select
-              value={selectedChainId}
-              onChange={(event) => setSelectedChainId(Number(event.target.value) as SupportedChainId)}
-              aria-label="Escrow network"
-            >
-              {[CHAIN_CONFIGS[ARBITRUM_CHAIN_ID], CHAIN_CONFIGS[1]].map((chain) => (
-                <option key={chain.chainId} value={chain.chainId}>{chain.name}</option>
-              ))}
-            </select>
-            <ChevronDown size={13} aria-hidden />
-          </label>
-        </div>
-        <CreateEscrowCard className="w-full" chainId={selectedChainId} />
-        <p className="rune-funds-note"><ShieldCheck size={15} /> Funds are never held by Crow. Escrows run on smart contracts.</p>
-      </section>
+      <div className="rune-create-column">
+        <section className="rune-create-panel" id="create" aria-label="Create new escrow">
+          <div className="rune-panel-head">
+            <h2>Create new escrow</h2>
+            <label className="rune-chain-select">
+              <LockKeyhole size={14} aria-hidden />
+              <span className="sr-only">Escrow network</span>
+              <span className="rune-chain-select-value" aria-hidden>
+                {CHAIN_CONFIGS[selectedChainId].name}
+              </span>
+              <select
+                value={selectedChainId}
+                onChange={(event) => setSelectedChainId(Number(event.target.value) as SupportedChainId)}
+                aria-label="Escrow network"
+              >
+                {[CHAIN_CONFIGS[ARBITRUM_CHAIN_ID], CHAIN_CONFIGS[1]].map((chain) => (
+                  <option key={chain.chainId} value={chain.chainId}>{chain.name}</option>
+                ))}
+              </select>
+              <ChevronDown size={13} aria-hidden />
+            </label>
+          </div>
+          <CreateEscrowCard className="w-full" chainId={selectedChainId} />
+          <p className="rune-funds-note"><ShieldCheck size={15} /> Funds are never held by Crow. Escrows run on smart contracts.</p>
+        </section>
+        <section className="rune-phase-embedded" id="guide" aria-label="Escrow lifecycle">
+          <PhaseCarousel compact />
+        </section>
+      </div>
 
       <div id="dashboard" className="rune-dashboard-panel" aria-label="Live escrow dashboard">
         <div className="rune-panel-head rune-dashboard-head">
           <div>
             <h2 className="rune-dashboard-title-with-help">
-              <i /> Live dashboard
+              Live dashboard
               <FieldHelpPopover label="Live dashboard" description={LIVE_DASHBOARD_HELP} />
             </h2>
             <p>Updates in real time</p>
@@ -160,13 +165,6 @@ export default function EscrowLanding() {
       </div>
     </section>
 
-    <section id="guide" className="rune-main-section rune-phase-section" aria-labelledby="phase-heading">
-      <div className="rune-phase-section-head">
-        <h2 id="phase-heading">How every escrow resolves</h2>
-        <p>Four lifecycle phases, one settlement date, and explicit wallet permissions.</p>
-      </div>
-      <PhaseCarousel />
-    </section>
     <footer id="compare" className="rune-footer"><span>© 2026 Crow. All rights reserved.</span><span id="pricing">Peer-to-peer escrow on Arbitrum and Ethereum</span><a href="#top">Return to top</a></footer>
   </main>;
 }

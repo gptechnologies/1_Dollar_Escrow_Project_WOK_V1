@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -90,7 +90,7 @@ const INTENT_ICONS: Record<DashboardAction['intent'], LucideIcon> = {
 
 const DASHBOARD_HELP = {
   escrowProgress:
-    'This shows where the escrow is in the process. Created means it exists. Funded means the buyer has sent the payment. Confirmed means the seller has acknowledged it. Resolved means the money has been released or refunded.',
+    'This shows the escrow lifecycle from Created to Active, Settlement, and Terminal. Terminal means the funds have been settled to the seller or refunded to the buyer.',
   actions:
     'Use these buttons to take the next allowed step. The right person, such as the buyer, seller, or arbitrator, can confirm, release, or refund when that action is available.',
   recentActions:
@@ -133,12 +133,21 @@ const formatActivityTime = (value: number | null | undefined): string => {
   if (!value) return '--:--';
   const date = new Date(value * 1000);
   if (Number.isNaN(date.getTime())) return '--:--';
-  return date.toLocaleString(undefined, {
-    month: 'numeric',
-    day: '2-digit',
-    year: '2-digit',
+  return date.toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
+  });
+};
+
+const formatActivityDate = (value: number | null | undefined): string => {
+  if (!value) return 'Date unavailable';
+  const date = new Date(value * 1000);
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
   });
 };
 
@@ -465,6 +474,7 @@ function InlineActionPanel({
 export default function EscrowCard(props: EscrowCardProps) {
   const [selectedAction, setSelectedAction] = useState<DashboardAction | null>(null);
   const [hydratedUrlAction, setHydratedUrlAction] = useState(false);
+  const activityListRef = useRef<HTMLDivElement>(null);
   const {
     escrow,
     code,
@@ -505,16 +515,9 @@ export default function EscrowCard(props: EscrowCardProps) {
     { label: 'Arbitrator 3', value: arbitrator3, copyLabel: 'Copy arbitrator 3 address' },
   ] as const;
 
-  // ── Progress: Created -> Funded -> Confirmed (optional) -> Resolved.
-  // Seller confirmation is optional, so a funded escrow can resolve without it.
-  type StepState = 'done' | 'active' | '';
-  const confirmed = status === 1 || status === 2;
-  const steps: { name: string; state: StepState }[] = [
-    { name: 'Created', state: 'done' },
-    { name: 'Funded', state: funded || confirmed || resolved ? 'done' : 'active' },
-    { name: 'Confirmed', state: confirmed || resolved ? 'done' : funded ? 'active' : '' },
-    { name: 'Resolved', state: resolved ? 'done' : status === 2 ? 'active' : '' },
-  ];
+  const lifecyclePhases = ['Created', 'Active', 'Settlement', 'Terminal'] as const;
+  const lifecycleIndex = status <= 0 ? 0 : status === 1 ? 1 : status === 2 ? 2 : 3;
+  const lifecycleProgress = ((lifecycleIndex + 1) / lifecyclePhases.length) * 100;
 
   const actionTiles = getDashboardActions({
     status,
@@ -558,6 +561,21 @@ export default function EscrowCard(props: EscrowCardProps) {
         tone: 'contract',
         text: 'Executed Function: Created',
       } satisfies EscrowActivity];
+
+  const activityByDate = [...recentActions]
+    .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
+    .reduce<Array<{ date: string; rows: EscrowActivity[] }>>((groups, row) => {
+      const date = formatActivityDate(row.timestamp);
+      const currentGroup = groups[groups.length - 1];
+      if (currentGroup?.date === date) currentGroup.rows.push(row);
+      else groups.push({ date, rows: [row] });
+      return groups;
+    }, []);
+
+  useEffect(() => {
+    const list = activityListRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [activity]);
 
   return (
     <div className="rune-dash">
@@ -616,13 +634,28 @@ export default function EscrowCard(props: EscrowCardProps) {
       {/* Progress */}
       <section className="rune-dash-progress">
         <DashboardHeading label="Escrow Progress" help={DASHBOARD_HELP.escrowProgress} />
-        <div className="rune-dash-steps">
-          {steps.map((step) => (
-            <div className={`rune-dash-step ${step.state}`} key={step.name}>
-              <b>{step.state === 'done' ? <Check size={13} /> : <i />}</b>
-              <span>{step.name}</span>
-            </div>
-          ))}
+        <div className="rune-dash-lifecycle" style={{ display: 'grid', gap: 9, marginTop: 16 }}>
+          <div
+            className="rune-dash-progress-track"
+            style={{ width: '100%', height: 7, overflow: 'hidden', borderRadius: 999, background: 'rgba(255, 255, 255, .14)' }}
+            role="progressbar"
+            aria-label={`Escrow lifecycle: ${lifecyclePhases[lifecycleIndex]}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={lifecycleProgress}
+          >
+            <span style={{ display: 'block', width: `${lifecycleProgress}%`, height: '100%', borderRadius: 'inherit', background: '#55e0ad' }} />
+          </div>
+          <div
+            className="rune-dash-progress-labels"
+            style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}
+          >
+            {lifecyclePhases.map((phase, index) => (
+              <span className={index === lifecycleIndex ? 'current' : index < lifecycleIndex ? 'complete' : ''} key={phase}>
+                {phase}
+              </span>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -639,12 +672,17 @@ export default function EscrowCard(props: EscrowCardProps) {
 
         <section className="rune-dash-panel rune-dash-log">
           <DashboardHeading label="Recent Actions" help={DASHBOARD_HELP.recentActions} />
-          <div className="rune-dash-log-list">
-            {recentActions.map((row) => (
-              <div className="rune-dash-log-row" key={row.id}>
-                <span className="rune-dash-log-time">[{formatActivityTime(row.timestamp)}]</span>
-                <span className={`rune-dash-log-role ${row.tone}`}>{row.role}:</span>
-                <span className="rune-dash-log-text">{row.text}</span>
+          <div className="rune-dash-log-list" ref={activityListRef}>
+            {activityByDate.map((group) => (
+              <div className="rune-dash-log-day" key={group.date}>
+                <time className="rune-dash-log-date">{group.date}</time>
+                {group.rows.map((row) => (
+                  <div className="rune-dash-log-row" key={row.id}>
+                    <time className="rune-dash-log-time">{formatActivityTime(row.timestamp)}</time>
+                    <span className={`rune-dash-log-role ${row.tone}`}>{row.role}:</span>
+                    <span className="rune-dash-log-text">{row.text}</span>
+                  </div>
+                ))}
               </div>
             ))}
           </div>

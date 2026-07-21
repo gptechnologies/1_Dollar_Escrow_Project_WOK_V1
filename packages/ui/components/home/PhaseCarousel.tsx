@@ -202,7 +202,44 @@ function ActionRow({ item }: { item: PhaseAction }) {
   );
 }
 
-export default function PhaseCarousel() {
+function PhaseActions({ slide, compact }: { slide: PhaseSlide; compact: boolean }) {
+  return (
+    <CardContent className="rune-phase-content">
+      {!compact && slide.nextStep ? (
+        <div className="rune-phase-next">
+          <span className="rune-phase-next-label">Next step</span>
+          <p>
+            <span className="rune-phase-next-icon" aria-hidden>
+              <Send />
+            </span>
+            {slide.nextStep}
+          </p>
+        </div>
+      ) : null}
+      {!compact ? (
+        <div className="rune-phase-actions-head">
+          {slide.actionsLabel ?? "Available actions"}
+        </div>
+      ) : null}
+      <div className="rune-phase-action-list">
+        <div className="rune-phase-action-columns" aria-hidden>
+          <span>Action</span>
+          <span>Who</span>
+          <span>Result</span>
+        </div>
+        {slide.actions.map((item) => (
+          <ActionRow key={item.action} item={item} />
+        ))}
+      </div>
+    </CardContent>
+  );
+}
+
+type PhaseCarouselProps = {
+  compact?: boolean;
+};
+
+export default function PhaseCarousel({ compact = false }: PhaseCarouselProps) {
   const [api, setApi] = React.useState<CarouselApi>();
   const [current, setCurrent] = React.useState(0);
   const [count, setCount] = React.useState(0);
@@ -223,51 +260,53 @@ export default function PhaseCarousel() {
   }, [api]);
 
   return (
-    <div className="rune-phase-carousel">
+    <div className={cn("rune-phase-carousel", compact && "rune-phase-carousel-compact")}>
+      {compact ? (
+        <div className="rune-phase-compact-toolbar">
+          <h2>
+            Escrow Lifecycle: <span className="rune-phase-current-tag">{phaseSlides[current]?.title ?? phaseSlides[0].title}</span>
+          </h2>
+          <div className="rune-phase-footer" aria-label="Carousel progress">
+            <span>{current + 1} / {count || phaseSlides.length}</span>
+            <div>
+              {phaseSlides.map((slide, index) => (
+                <button
+                  key={slide.title}
+                  type="button"
+                  aria-label={`Go to ${slide.title}`}
+                  aria-current={current === index ? "true" : undefined}
+                  onClick={() => api?.scrollTo(index)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
       <Carousel setApi={setApi} opts={{ align: "start", loop: false }}>
         <CarouselContent>
           {phaseSlides.map((slide) => (
             <CarouselItem key={slide.title}>
-              <Card className="rune-phase-card">
-                <CardHeader className="rune-phase-header">
-                  <Badge className="rune-phase-number">{slide.phase}</Badge>
-                  <CardTitle>{slide.title}</CardTitle>
-                  <CardDescription>{slide.description}</CardDescription>
-                </CardHeader>
-                <CardContent className="rune-phase-content">
-                  {slide.nextStep ? (
-                    <div className="rune-phase-next">
-                      <span className="rune-phase-next-label">Next step</span>
-                      <p>
-                        <span className="rune-phase-next-icon" aria-hidden>
-                          <Send />
-                        </span>
-                        {slide.nextStep}
-                      </p>
-                    </div>
-                  ) : null}
-                  <div className="rune-phase-actions-head">
-                    {slide.actionsLabel ?? "Available actions"}
-                  </div>
-                  <div className="rune-phase-action-list">
-                    <div className="rune-phase-action-columns" aria-hidden>
-                      <span>Action</span>
-                      <span>Who</span>
-                      <span>Result</span>
-                    </div>
-                    {slide.actions.map((item) => (
-                      <ActionRow key={item.action} item={item} />
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
+              {compact ? (
+                <div className="rune-phase-compact-slide">
+                  <PhaseActions slide={slide} compact />
+                </div>
+              ) : (
+                <Card className="rune-phase-card">
+                  <CardHeader className="rune-phase-header">
+                    <Badge className="rune-phase-number">{slide.phase}</Badge>
+                    <CardTitle>{slide.title}</CardTitle>
+                    <CardDescription>{slide.description}</CardDescription>
+                  </CardHeader>
+                  <PhaseActions slide={slide} compact={false} />
+                </Card>
+              )}
             </CarouselItem>
           ))}
         </CarouselContent>
         <CarouselPrevious className="rune-phase-arrow rune-phase-arrow-prev" />
         <CarouselNext className="rune-phase-arrow rune-phase-arrow-next" />
       </Carousel>
-      <div className="rune-phase-footer" aria-label="Carousel progress">
+      {!compact ? <div className="rune-phase-footer" aria-label="Carousel progress">
         <span>{current + 1} / {count || phaseSlides.length}</span>
         <div>
           {phaseSlides.map((slide, index) => (
@@ -280,7 +319,7 @@ export default function PhaseCarousel() {
             />
           ))}
         </div>
-      </div>
+      </div> : null}
     </div>
   );
 }
