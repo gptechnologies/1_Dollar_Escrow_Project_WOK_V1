@@ -9,9 +9,7 @@ import {
   Check,
   ChevronDown,
   ClipboardPaste,
-  Wallet,
   CircleDollarSign,
-  ArrowLeft,
 } from 'lucide-react';
 import { startOfDay } from 'date-fns';
 import { keccak256, parseEventLogs, toBytes, type Address, type Hex } from 'viem';
@@ -694,19 +692,9 @@ export default function CreateEscrowCard({
 
           {/* Footer */}
           <div className="rune-cform-footer rune-frow-full">
-            <button
-              type="button"
-              onClick={resetForm}
-              className="rune-cform-back"
-              title="Clear form"
-              aria-label="Clear form"
-            >
-              <ArrowLeft size={18} />
-            </button>
             {!wallet.address ? (
               <button type="button" onClick={() => wallet.connect()} className="rune-cform-submit">
-                <Wallet className="w-4 h-4" />
-                Connect Wallet to Create
+                Create
               </button>
             ) : wallet.chainId !== chainId ? (
               <button type="button" onClick={() => wallet.switchChain()} className="rune-cform-submit">
@@ -726,7 +714,7 @@ export default function CreateEscrowCard({
                     {createStep === 'registering' && 'Registering escrow...'}
                   </span>
                 ) : (
-                  'Create Escrow'
+                  'Create'
                 )}
               </button>
             )}

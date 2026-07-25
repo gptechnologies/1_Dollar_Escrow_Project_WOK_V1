@@ -5441,3 +5441,40 @@ body {
     padding-left: 0 !important;
   }
 }
+
+/* Mobile form and lifecycle finishing pass. */
+.rune-cform-footer {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.rune-phase-carousel-compact .rune-phase-action-columns,
+.rune-phase-carousel-compact .rune-phase-action-row {
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, .64fr) minmax(0, 1fr);
+}
+
+@media (max-width: 760px) {
+  .rune-header-nav-action {
+    justify-self: center !important;
+    text-align: center;
+  }
+
+  .rune-phase-carousel-compact {
+    padding-inline: 8px;
+  }
+
+  .rune-phase-compact-toolbar {
+    padding-inline: 4px;
+  }
+
+  .rune-phase-carousel-compact .rune-phase-action-columns,
+  .rune-phase-carousel-compact .rune-phase-action-row {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, .62fr) minmax(0, 1fr);
+    column-gap: 6px;
+    padding-inline: 10px;
+  }
+
+  .rune-phase-carousel-compact .rune-phase-action-name strong {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+}

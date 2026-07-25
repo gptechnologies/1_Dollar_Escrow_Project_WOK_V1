@@ -303,8 +303,12 @@ export default function PhaseCarousel({ compact = false }: PhaseCarouselProps) {
             </CarouselItem>
           ))}
         </CarouselContent>
-        <CarouselPrevious className="rune-phase-arrow rune-phase-arrow-prev" />
-        <CarouselNext className="rune-phase-arrow rune-phase-arrow-next" />
+        {!compact ? (
+          <>
+            <CarouselPrevious className="rune-phase-arrow rune-phase-arrow-prev" />
+            <CarouselNext className="rune-phase-arrow rune-phase-arrow-next" />
+          </>
+        ) : null}
       </Carousel>
       {!compact ? <div className="rune-phase-footer" aria-label="Carousel progress">
         <span>{current + 1} / {count || phaseSlides.length}</span>
